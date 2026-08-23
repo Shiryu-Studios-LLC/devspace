@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import {
   createBashTool,
   createEditTool,
@@ -17,6 +19,9 @@ import {
   type AgentToolResult,
 } from "@earendil-works/pi-coding-agent";
 import { resolveAllowedPath } from "./roots.js";
+import { resolveShellCommand } from "./process-platform.js";
+
+const execFileAsync = promisify(execFile);
 
 type McpContent = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
 export type ToolResponse<TDetails = unknown> = {
@@ -119,9 +124,31 @@ export async function listDirectoryTool(input: LsToolInput, context: ToolContext
 }
 
 export async function runShellTool(input: BashToolInput, context: ToolContext): Promise<ToolResponse> {
-  const tool = createBashTool(context.cwd);
   const timeout = input.timeout === undefined ? 30 : Math.min(input.timeout, 300);
 
+  if (process.platform === "win32") {
+    try {
+      const shell = resolveShellCommand(input.command, process.platform, process.env);
+      const result = await execFileAsync(shell.executable, shell.args, {
+        cwd: context.cwd,
+        windowsHide: true,
+        timeout: timeout * 1000,
+        maxBuffer: 10 * 1024 * 1024,
+      });
+      const text = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+      return { content: [{ type: "text", text: text || "Command completed successfully." }] };
+    } catch (error) {
+      const failure = error as NodeJS.ErrnoException & { stdout?: string | Buffer; stderr?: string | Buffer };
+      const stdout = typeof failure.stdout === "string" ? failure.stdout : failure.stdout?.toString() ?? "";
+      const stderr = typeof failure.stderr === "string" ? failure.stderr : failure.stderr?.toString() ?? "";
+      const message = [stdout, stderr, error instanceof Error ? error.message : String(error)]
+        .filter(Boolean)
+        .join("\n");
+      return { content: [{ type: "text", text: message }], isError: true };
+    }
+  }
+
+  const tool = createBashTool(context.cwd);
   return runTool((params) => tool.execute("run_shell", params), {
     command: input.command,
     timeout,
