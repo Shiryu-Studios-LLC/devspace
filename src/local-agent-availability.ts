@@ -1,5 +1,5 @@
 import { accessSync, constants } from "node:fs";
-import { delimiter, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import {
   LOCAL_AGENT_PROVIDERS,
   type LocalAgentProvider,
@@ -109,13 +109,14 @@ function resolveCommand(command: string, env: NodeJS.ProcessEnv): string | undef
   if (command.includes("/") || command.includes("\\")) {
     return executableExists(command) ? command : undefined;
   }
-  const path = env.PATH;
-  if (!path) return undefined;
   const extensions = process.platform === "win32"
     ? ["", ...(env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)]
     : [""];
-  for (const directory of path.split(delimiter)) {
-    if (!directory) continue;
+  const directories = [
+    ...(env.PATH ?? "").split(delimiter).filter(Boolean),
+    ...(process.platform === "win32" && env.APPDATA ? [join(env.APPDATA, "npm")] : []),
+  ];
+  for (const directory of new Set(directories)) {
     for (const extension of extensions) {
       const candidate = resolve(directory, `${command}${extension}`);
       if (executableExists(candidate)) return candidate;
