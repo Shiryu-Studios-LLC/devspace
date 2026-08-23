@@ -282,9 +282,13 @@ Profiles are discovered from:
 
 See [Agent Profile Schema](docs/agent-profile-schema.md) and
 [Local Agent Daemon](docs/local-agent-daemon.md) for lifecycle and failure
-semantics. DevSpace currently teaches MCP hosts the agent CLI workflow through
-its bundled `subagents` skill; it does not expose first-class public MCP tools
-such as `agent_spawn` or `agent_wait`.
+semantics. DevSpace also exposes first-class MCP orchestration tools when subagents are
+enabled: `agent_spawn`, `agent_status`, `agent_list`, `agent_continue`, and
+`agent_wait`. New and continued turns default to read-only access; callers must
+explicitly request `allowed` or `full_access` when a delegated task needs to
+modify the workspace. Per-agent cancellation is not yet exposed because provider
+runtimes may be shared across sessions and must be interrupted through a
+provider-aware cancellation contract rather than by terminating the whole daemon.
 
 The local Shiryu deployment has verified provider discovery, but its first
 Codex app-server turn has not completed successfully. Do not describe the Codex

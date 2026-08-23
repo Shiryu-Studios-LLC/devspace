@@ -124,6 +124,40 @@ test("open_workspace omits providers disabled by configuration", async (t) => {
   );
 });
 
+test("subagent-enabled servers expose first-class agent orchestration tools", async (t) => {
+  const context = await fixture(t, {
+    localAgentProviders: [{ name: "codex", available: true }],
+  });
+  const tools = await context.client.listTools();
+  const names = new Set(tools.tools.map((tool) => tool.name));
+
+  for (const name of [
+    "agent_spawn",
+    "agent_status",
+    "agent_list",
+    "agent_continue",
+    "agent_wait",
+  ]) {
+    assert.equal(names.has(name), true, `${name} should be exposed when subagents are enabled`);
+  }
+});
+
+test("subagent-disabled servers omit first-class agent orchestration tools", async (t) => {
+  const context = await fixture(t);
+  const tools = await context.client.listTools();
+  const names = new Set(tools.tools.map((tool) => tool.name));
+
+  for (const name of [
+    "agent_spawn",
+    "agent_status",
+    "agent_list",
+    "agent_continue",
+    "agent_wait",
+  ]) {
+    assert.equal(names.has(name), false, `${name} should be hidden when subagents are disabled`);
+  }
+});
+
 test("concurrent checkout opens return one full context and one reuse instruction", async (t) => {
   const context = await fixture(t);
   const [first, second] = await Promise.all([
