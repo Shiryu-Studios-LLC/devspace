@@ -50,6 +50,9 @@ import {
 } from "./mcp-sessions.js";
 import { ProcessSessionManager, type ProcessSnapshot } from "./process-sessions.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
+import { registerDevSpaceAdminTools } from "./devspace-admin-tools.js";
+import { registerGitTools } from "./git-tools.js";
+import { registerLocalWindowsTools } from "./local-windows-tools.js";
 import { openAiConversationScopeId } from "./request-meta.js";
 import { shutdownHttpServer } from "./server-shutdown.js";
 import { formatPathForPrompt } from "./skills.js";
@@ -487,6 +490,10 @@ function appCsp(config: ServerConfig): {
   };
 }
 
+function appWidgetDomain(config: ServerConfig): string {
+  return config.publicBaseUrl.replace(/\/+$/, "");
+}
+
 function uiBuildDirectory(): string {
   return fileURLToPath(new URL("../dist/ui", import.meta.url));
 }
@@ -734,6 +741,7 @@ export function createMcpServer(
       _meta: {
         ui: {
           csp: appCsp(config),
+          domain: appWidgetDomain(config),
         },
       },
     },
@@ -748,6 +756,7 @@ export function createMcpServer(
             _meta: {
               ui: {
                 csp: appCsp(config),
+                domain: appWidgetDomain(config),
               },
             },
           },
@@ -1657,6 +1666,10 @@ export function createMcpServer(
   if (config.toolMode === "codex") {
     registerCodexProcessTools(server, config, workspaces, processSessions);
   }
+
+  registerGitTools(server, config, workspaces);
+  registerDevSpaceAdminTools(server, config);
+  registerLocalWindowsTools(server, config, workspaces);
 
   if (config.artifactsEnabled && isArtifactDownloadSupportedPlatform()) {
     registerArtifactTools(server, {
