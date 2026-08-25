@@ -1,5 +1,4 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn } from "node:child_process";
 import {
   createBashTool,
   createEditTool,
@@ -19,9 +18,88 @@ import {
   type AgentToolResult,
 } from "@earendil-works/pi-coding-agent";
 import { resolveAllowedPath } from "./roots.js";
-import { resolveShellCommand } from "./process-platform.js";
+import { resolveShellCommand, terminateProcessTree } from "./process-platform.js";
 
-const execFileAsync = promisify(execFile);
+const WINDOWS_SHELL_MAX_BUFFER = 10 * 1024 * 1024;
+
+interface ShellFailure extends Error {
+  stdout?: string;
+  stderr?: string;
+}
+
+async function runWindowsShell(
+  command: string,
+  cwd: string,
+  timeoutMs: number,
+): Promise<{ stdout: string; stderr: string }> {
+  const shell = resolveShellCommand(command, "win32", process.env);
+  const child = spawn(shell.executable, shell.args, {
+    cwd,
+    windowsHide: true,
+    stdio: "pipe",
+  });
+  let stdout = "";
+  let stderr = "";
+  let bufferedBytes = 0;
+  let overflow: Error | undefined;
+
+  const append = (stream: "stdout" | "stderr", chunk: Buffer): void => {
+    if (overflow) return;
+    const text = chunk.toString("utf8");
+    bufferedBytes += Buffer.byteLength(text);
+    if (bufferedBytes > WINDOWS_SHELL_MAX_BUFFER) {
+      overflow = new Error(`Shell output exceeded ${WINDOWS_SHELL_MAX_BUFFER} bytes.`);
+      terminateProcessTree(child, "SIGTERM", false);
+      return;
+    }
+    if (stream === "stdout") stdout += text;
+    else stderr += text;
+  };
+
+  child.stdout.on("data", (chunk: Buffer) => append("stdout", chunk));
+  child.stderr.on("data", (chunk: Buffer) => append("stderr", chunk));
+  child.stdin.end();
+
+  return new Promise((resolve, reject) => {
+    let timedOut = false;
+    let settled = false;
+    let closeFallback: NodeJS.Timeout | undefined;
+
+    const fail = (error: ShellFailure): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (closeFallback) clearTimeout(closeFallback);
+      error.stdout = stdout;
+      error.stderr = stderr;
+      reject(error);
+    };
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      terminateProcessTree(child, "SIGTERM", false);
+      closeFallback = setTimeout(() => {
+        fail(new Error(`Shell command timed out after ${timeoutMs}ms.`));
+      }, 2_000);
+    }, timeoutMs);
+
+    child.once("error", (error) => fail(error));
+    child.once("close", (code, signal) => {
+      if (settled) return;
+      clearTimeout(timer);
+      if (overflow) return fail(overflow);
+      if (timedOut) return fail(new Error(`Shell command timed out after ${timeoutMs}ms.`));
+      if (code !== 0) {
+        return fail(new Error(
+          `Shell command exited with code ${code ?? "unknown"}${signal ? ` (${signal})` : ""}.`,
+        ));
+      }
+      settled = true;
+      if (closeFallback) clearTimeout(closeFallback);
+      resolve({ stdout, stderr });
+    });
+  });
+}
 
 type McpContent = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
 export type ToolResponse<TDetails = unknown> = {
@@ -126,15 +204,10 @@ export async function listDirectoryTool(input: LsToolInput, context: ToolContext
 export async function runShellTool(input: BashToolInput, context: ToolContext): Promise<ToolResponse> {
   const timeout = input.timeout === undefined ? 30 : Math.min(input.timeout, 300);
 
-  if (process.platform === "win32") {
+  const windowsWorkspace = process.platform === "win32" || /^[A-Za-z]:[\\/]/.test(context.cwd);
+  if (windowsWorkspace) {
     try {
-      const shell = resolveShellCommand(input.command, process.platform, process.env);
-      const result = await execFileAsync(shell.executable, shell.args, {
-        cwd: context.cwd,
-        windowsHide: true,
-        timeout: timeout * 1000,
-        maxBuffer: 10 * 1024 * 1024,
-      });
+      const result = await runWindowsShell(input.command, context.cwd, timeout * 1000);
       const text = `${result.stdout ?? ""}${result.stderr ?? ""}`;
       return { content: [{ type: "text", text: text || "Command completed successfully." }] };
     } catch (error) {

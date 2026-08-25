@@ -48,6 +48,17 @@ assert.equal(foreground.exitCode, 0);
 assert.match(foreground.output, /foreground/);
 assert.equal(foreground.sessionId, undefined);
 
+const defaultYieldStartedAt = Date.now();
+const defaultYield = await manager.start({
+  workspaceId: "workspace-a",
+  cwd: process.cwd(),
+  command: `${node} -e "setTimeout(() => process.exit(0), 3000)"`,
+});
+assert.equal(defaultYield.running, true);
+assert.ok(defaultYield.sessionId);
+assert.ok(Date.now() - defaultYieldStartedAt < 2_500, "default command yield held the request too long");
+manager.terminate("workspace-a", defaultYield.sessionId);
+
 const environment = await manager.start({
   workspaceId: "workspace-a",
   workspaceRoot: "/tmp/devspace-workspace-a",

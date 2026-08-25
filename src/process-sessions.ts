@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { resolveShellCommand, terminateProcessTree } from "./process-platform.js";
 
-const DEFAULT_EXEC_YIELD_MS = 10_000;
+const DEFAULT_EXEC_YIELD_MS = 1_000;
 const DEFAULT_INTERACTIVE_YIELD_MS = 250;
 const DEFAULT_POLL_YIELD_MS = 5_000;
 const MAX_COMMAND_YIELD_MS = 30_000;
@@ -338,12 +338,19 @@ export class ProcessSessionManager {
     });
 
     session.process = {
-      write: (data) => child.stdin.write(data),
+      write: (data) => {
+        if (!child.stdin.destroyed && child.stdin.writable) child.stdin.write(data);
+      },
       kill: (signal = "SIGTERM") => terminateProcessTree(child, signal, detached),
       resize: input.tty ? () => undefined : undefined,
     };
     child.stdout.on("data", (data: Buffer) => this.append(session, data.toString("utf8")));
     child.stderr.on("data", (data: Buffer) => this.append(session, data.toString("utf8")));
+    child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+      if (session.running && error.code !== "EPIPE" && error.code !== "ERR_STREAM_DESTROYED") {
+        this.append(session, `${error.message}\n`);
+      }
+    });
     child.on("error", (error) => this.append(session, `${error.message}\n`));
     child.on("close", (code, signal) => this.finish(session, code ?? undefined, signal ?? undefined));
   }
