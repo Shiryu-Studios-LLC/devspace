@@ -10,6 +10,12 @@ import { join, resolve } from "node:path";
 import { expandHomePath } from "./roots.js";
 import type { StoredSubagentsConfig } from "./local-agent-config.js";
 
+export interface UpstreamMcpServerConfig {
+  name: string;
+  url: string;
+  enabled?: boolean;
+}
+
 export interface DevspaceUserConfig {
   host?: string;
   port?: number;
@@ -22,6 +28,7 @@ export interface DevspaceUserConfig {
   artifactMaxFileBytes?: number;
   agentDir?: string;
   subagents?: StoredSubagentsConfig;
+  upstreamMcpServers?: UpstreamMcpServerConfig[];
 }
 
 export interface DevspaceAuthConfig {

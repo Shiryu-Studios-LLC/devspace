@@ -1,0 +1,22 @@
+[Desktop Entry]
+Type=Service
+X-KDE-ServiceTypes=KonqPopupMenu/Plugin
+MimeType=application/x-uproject;
+Actions=OpenInRider;GenerateProjectFiles;SwitchEngineVersion;
+X-KDE-MaxNumberOfUrls=1
+X-KDE-AuthorizeAction=shell_access
+
+[Desktop Action OpenInRider]
+Name=Open in JetBrains Rider
+Icon=jetbrains-rider-149ad65d-a308-4e29-8025-aa500940c372
+Exec=/home/okashi/.local/share/JetBrains/Toolbox/apps/rider/bin/rider %f
+
+[Desktop Action GenerateProjectFiles]
+Name=Generate Rider Project Files
+Icon=applications-development
+Exec=/usr/bin/konsole -e /home/okashi/.local/bin/unreal-generate-rider %f
+
+[Desktop Action SwitchEngineVersion]
+Name=Switch Unreal Engine Version
+Icon=preferences-system
+Exec=/usr/bin/konsole --hold -e /home/okashi/Unreal/Engine/Binaries/Linux/UnrealVersionSelector-Linux-Shipping -switchversion %f

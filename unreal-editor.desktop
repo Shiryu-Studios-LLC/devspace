@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Unreal Editor
+Comment=Launch Unreal Engine Editor
+Exec=/home/okashi/Unreal/Engine/Binaries/Linux/UnrealEditor -graphicsadapter=1 %F
+Icon=/home/okashi/Unreal/Engine/Content/Editor/Slate/About/UnrealLogo.svg
+Terminal=false
+Categories=Development;IDE;Graphics;
+StartupNotify=true
+StartupWMClass=UnrealEditor
+MimeType=application/x-uproject;

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { InvalidGrantError, InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import { databasePath, openDatabase } from "./db/client.js";
 import { SingleUserOAuthProvider } from "./oauth-provider.js";
-import { SqliteOAuthClientsStore, SqliteOAuthStore } from "./oauth-store.js";
+import { redirectHostAllowed, SqliteOAuthClientsStore, SqliteOAuthStore } from "./oauth-store.js";
 
 const root = await mkdtemp(join(tmpdir(), "devspace-oauth-test-"));
 const oauthConfig = {
@@ -14,7 +14,7 @@ const oauthConfig = {
   accessTokenTtlSeconds: 3600,
   refreshTokenTtlSeconds: 2592000,
   scopes: ["devspace"],
-  allowedRedirectHosts: ["chatgpt.com"],
+  allowedRedirectHosts: ["chatgpt.com", "openai.com"],
 };
 const mcpUrl = new URL("https://agent.example.com/mcp");
 const redirectUri = "https://chatgpt.com/connector_platform_oauth_redirect";
@@ -24,7 +24,9 @@ try {
   testPersistenceAndTokenHashing(join(root, "persistence"));
   testExpiredTokenCleanup(join(root, "expiration"));
   testTransactionalTokenRotation(join(root, "rotation"));
+  testRedirectHostAllowed();
   await testProviderRestartRotationAndRevocation(join(root, "provider"));
+  await testProviderResourceAndScopeFlexibility(join(root, "flexibility"));
 } finally {
   await rm(root, { recursive: true, force: true });
 }
@@ -244,6 +246,132 @@ async function testProviderRestartRotationAndRevocation(stateDir: string): Promi
     );
   } finally {
     secondProvider.close();
+  }
+}
+
+function testRedirectHostAllowed(): void {
+  const allowed = ["chatgpt.com", "openai.com"];
+  assert.equal(redirectHostAllowed("https://chatgpt.com/callback", allowed), true);
+  assert.equal(redirectHostAllowed("https://connector.chatgpt.com/callback", allowed), true);
+  assert.equal(redirectHostAllowed("https://chat.openai.com/callback", allowed), true);
+  assert.equal(redirectHostAllowed("https://platform.openai.com/callback", allowed), true);
+  assert.equal(redirectHostAllowed("http://localhost:3000/callback", allowed), true);
+  assert.equal(redirectHostAllowed("http://127.0.0.1:8080/callback", allowed), true);
+  assert.equal(redirectHostAllowed("http://[::1]:8080/callback", allowed), true);
+  assert.equal(redirectHostAllowed("https://evil.com/callback", allowed), false);
+  assert.equal(redirectHostAllowed("https://not-chatgpt.com/callback", allowed), false);
+
+  // Wildcard allowed hosts
+  assert.equal(redirectHostAllowed("https://anywhere.example.com/callback", ["*"]), true);
+  assert.equal(redirectHostAllowed("https://evil.com/callback", ["*"]), true);
+}
+
+async function testProviderResourceAndScopeFlexibility(stateDir: string): Promise<void> {
+  const provider = new SingleUserOAuthProvider(oauthConfig, mcpUrl, stateDir);
+  try {
+    const client = await provider.clientsStore.registerClient?.({
+      redirect_uris: ["https://chatgpt.com/connector_platform_oauth_redirect"],
+      client_name: "ChatGPT",
+    });
+    assert.ok(client);
+
+    // 1. Authorize GET request with no resource and empty scopes (standard ChatGPT behavior)
+    let renderedHtml = "";
+    let statusCode = 0;
+    const mockGetRes: any = {
+      req: { method: "GET" },
+      status: (code: number) => {
+        statusCode = code;
+        return mockGetRes;
+      },
+      setHeader: () => mockGetRes,
+      send: (body: string) => {
+        renderedHtml = body;
+        return mockGetRes;
+      },
+    };
+
+    await provider.authorize(
+      client,
+      {
+        redirectUri: "https://chatgpt.com/connector_platform_oauth_redirect",
+        codeChallenge: "code-challenge-xyz",
+        scopes: [], // empty scopes
+      },
+      mockGetRes,
+    );
+
+    assert.equal(statusCode, 200);
+    assert.ok(renderedHtml.includes("Connect DevSpace"));
+    assert.ok(renderedHtml.includes("ChatGPT"));
+    assert.ok(renderedHtml.includes('name="owner_token"'));
+
+    // 2. Authorize POST request with owner password and omitted resource
+    let redirectStatus = 0;
+    let redirectUrl = "";
+    const mockPostRes: any = {
+      req: {
+        method: "POST",
+        body: {
+          owner_token: oauthConfig.ownerToken,
+        },
+      },
+      status: (code: number) => {
+        statusCode = code;
+        return mockPostRes;
+      },
+      setHeader: () => mockPostRes,
+      redirect: (code: number, url: string) => {
+        redirectStatus = code;
+        redirectUrl = url;
+      },
+    };
+
+    await provider.authorize(
+      client,
+      {
+        redirectUri: "https://chatgpt.com/connector_platform_oauth_redirect",
+        codeChallenge: "challenge-123",
+        state: "client-state-abc",
+        scopes: [], // empty scopes
+      },
+      mockPostRes,
+    );
+
+    assert.equal(redirectStatus, 302);
+    const parsedRedirect = new URL(redirectUrl);
+    assert.equal(parsedRedirect.searchParams.get("state"), "client-state-abc");
+    const code = parsedRedirect.searchParams.get("code");
+    assert.ok(code);
+
+    // 3. Challenge verification
+    const challenge = await provider.challengeForAuthorizationCode(client, code);
+    assert.equal(challenge, "challenge-123");
+
+    // 4. Token exchange without resource parameter
+    const tokens = await provider.exchangeAuthorizationCode(
+      client,
+      code,
+      undefined,
+      "https://chatgpt.com/connector_platform_oauth_redirect",
+    );
+    assert.ok(tokens.access_token);
+    assert.ok(tokens.refresh_token);
+    assert.equal(tokens.scope, "devspace");
+
+    // 5. Verify access token has resource set to default resource server URL
+    const verified = await provider.verifyAccessToken(tokens.access_token);
+    assert.equal(verified.clientId, client.client_id);
+    assert.equal(verified.resource?.href, mcpUrl.href);
+
+    // 6. Test isResourceAllowed helper
+    assert.equal(provider.isResourceAllowed(undefined), true);
+    assert.equal(provider.isResourceAllowed(new URL("https://agent.example.com/mcp")), true);
+    assert.equal(provider.isResourceAllowed(new URL("https://agent.example.com/")), true);
+    assert.equal(provider.isResourceAllowed(new URL("https://agent.example.com")), true);
+    assert.equal(provider.isResourceAllowed(new URL("https://other-domain.example.com/mcp")), false);
+  } finally {
+    provider.close();
   }
 }
 

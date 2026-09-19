@@ -227,6 +227,10 @@ honored.
 
 ### Elevated admin bridge
 
+DevSpace and its elevated partner now have Windows, macOS, and Linux service
+installation paths. See [Services](docs/services.md). The core MCP server runs
+as the selected user; only DevSpaceAdmin runs with administrative authority.
+
 `devspace_admin_status` and `devspace_admin_call` wrap the separately installed
 Shiryu DevSpace Admin helper:
 
@@ -235,6 +239,7 @@ C:\Program Files\Shiryu Studios\DevSpaceAdmin\devspace-adminctl.exe
 ```
 
 Set `DEVSPACE_ADMIN_CTL` only when the verified helper is installed elsewhere.
+On Linux and macOS the default helper is `/usr/local/bin/devspace-adminctl`.
 The admin service is separate from the DevSpace MCP server and public tunnel.
 The generic call tool does not grant undocumented actions: callers must use an
 action supported by the installed helper and should treat every call as an
@@ -313,6 +318,27 @@ For a normal ChatGPT coding session:
 5. Ask ChatGPT to open a project inside one of your allowed roots.
 
 ## Platform Support
+
+## Upstream MCP servers
+
+DevSpace can expose tools from additional local MCP servers through its own `/mcp` endpoint. This is
+useful when one private tunnel connects ChatGPT to several local applications. Configure entries in
+the DevSpace `config.json`; each server keeps its own local URL, while ChatGPT connects only to
+DevSpace.
+
+```json
+{
+  "upstreamMcpServers": [
+    { "name": "unity", "url": "http://127.0.0.1:8080/mcp" },
+    { "name": "unreal", "url": "http://127.0.0.1:8001/mcp" },
+    { "name": "blockbench", "url": "http://127.0.0.1:8002/mcp", "enabled": false }
+  ]
+}
+```
+
+Use `list_upstream_mcp_tools` to discover a running application's tools, then call one with
+`call_upstream_mcp_tool`. Set `enabled` to `true` after installing or starting a server; add future
+servers by adding another named entry. An unavailable server is reported without taking DevSpace down.
 
 DevSpace supports Linux, macOS, and Windows. On Windows, command execution uses
 the native command processor; PowerShell commands and existing `.ps1` scripts

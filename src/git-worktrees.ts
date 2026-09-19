@@ -1,8 +1,9 @@
 import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir, realpath, rm, stat } from "node:fs/promises";
-import { basename, join, relative, resolve } from "node:path";
+import { constants as fsConstants } from "node:fs";
+import { chmod, copyFile, lstat, mkdir, readlink, realpath, rm, stat, symlink } from "node:fs/promises";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import type { ServerConfig } from "./config.js";
 import { assertAllowedPath, isPathInsideRoot } from "./roots.js";
 
@@ -69,7 +70,24 @@ export async function createManagedWorktree(input: {
   assertAllowedPath(worktreePath, [input.config.worktreeRoot]);
 
   try {
-    await git(["worktree", "add", "--detach", worktreePath, baseSha], sourceRoot);
+    const sourceHeadSha = await resolveBaseCommit(sourceRoot, "HEAD");
+    const canSeedFromSource = !dirtySource && sourceHeadSha === baseSha;
+
+    if (canSeedFromSource) {
+      await git(["worktree", "add", "--detach", "--no-checkout", worktreePath, baseSha], sourceRoot);
+
+      try {
+        await seedWorktreeFromSourceWithReflinks(sourceRoot, worktreePath);
+        await git(["reset", "--mixed", "-q", baseSha], worktreePath);
+      } catch {
+        // Reflinks are an optimization only. If the filesystem, sparse checkout,
+        // file type, or source layout cannot be cloned safely, let Git perform
+        // the normal checkout so workspace creation remains portable.
+        await git(["reset", "--hard", "-q", baseSha], worktreePath);
+      }
+    } else {
+      await git(["worktree", "add", "--detach", worktreePath, baseSha], sourceRoot);
+    }
   } catch (error) {
     await rm(worktreePath, { recursive: true, force: true });
     const message = error instanceof Error ? error.message : String(error);
@@ -143,6 +161,38 @@ async function resolveBaseCommit(sourceRoot: string, baseRef: string): Promise<s
       "GIT_INVALID_BASE_REF",
       `Cannot open workspace in worktree mode because baseRef ${JSON.stringify(baseRef)} does not resolve to a commit.`,
     );
+  }
+}
+
+async function seedWorktreeFromSourceWithReflinks(sourceRoot: string, worktreePath: string): Promise<void> {
+  const trackedPaths = (await git(["ls-files", "-z"], sourceRoot))
+    .split("\0")
+    .filter(Boolean);
+
+  for (const trackedPath of trackedPaths) {
+    const sourcePath = resolve(sourceRoot, trackedPath);
+    const destinationPath = resolve(worktreePath, trackedPath);
+    const sourceStats = await lstat(sourcePath);
+
+    if (sourceStats.isDirectory()) {
+      // Gitlinks/submodules are represented as directories in an initialized
+      // source checkout. A normal worktree does not initialize their contents.
+      continue;
+    }
+
+    await mkdir(dirname(destinationPath), { recursive: true });
+
+    if (sourceStats.isSymbolicLink()) {
+      await symlink(await readlink(sourcePath), destinationPath);
+      continue;
+    }
+
+    if (!sourceStats.isFile()) {
+      throw new Error(`Cannot reflink unsupported tracked file type: ${trackedPath}`);
+    }
+
+    await copyFile(sourcePath, destinationPath, fsConstants.COPYFILE_FICLONE);
+    await chmod(destinationPath, sourceStats.mode & 0o777);
   }
 }
 

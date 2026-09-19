@@ -90,6 +90,7 @@ const target = {
 };
 
 export function registerLocalWindowsTools(server: McpServer, _config: ServerConfig, workspaces: WorkspaceRegistry): void {
+  if (process.platform !== "win32") return;
   registerAppTool(server, "computer_allowed_processes", { title: "Computer Control Allowlist", description: "Show the fixed executable allowlist.", inputSchema: {}, _meta: {}, annotations: readAnnotations }, async () => response("computer_allowed_processes", { allowedProcesses: ALLOWED_PROCESSES, defaultAllowedProcesses: DEFAULT_PROCESSES }));
   registerAppTool(server, "computer_windows", { title: "Computer Windows", description: "List visible allowlisted windows.", inputSchema: { allowedProcesses: target.allowedProcesses }, _meta: {}, annotations: readAnnotations }, async (i) => response("computer_windows", run("list", i)));
   const reg = (name: string, title: string, action: string, extra: Json = {}) => registerAppTool(server, name, { title, description: `${title} in a revalidated allowlisted window.`, inputSchema: { ...target, ...extra }, _meta: {}, annotations }, async (i) => response(name, run(action, i)));

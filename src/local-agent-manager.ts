@@ -422,7 +422,7 @@ export class LocalAgentManager {
       prompt: fullPrompt,
       workspaceRoot: record.workspaceRoot,
       providerSessionId: record.providerSessionId,
-      writeMode: overrides.writeMode ?? "allowed",
+      writeMode: overrides.writeMode ?? "read_only",
       model: record.model ?? profile?.model,
       effort: record.effort ?? profile?.effort,
       modelOverrideRequested: overrides.model !== undefined,

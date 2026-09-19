@@ -233,6 +233,7 @@ assert.equal(first.status, "running");
 assert.equal(first.model, "gpt-default");
 assert.equal(first.effort, "medium");
 await waitFor(() => runtimes.get(first.id)?.inputs.length === 1);
+assert.equal(runtimes.get(first.id)!.inputs[0]!.writeMode, "read_only");
 const conflict = await manager.continue(first.id, "another prompt", {}, scope);
 assert.equal(conflict.isErr(), true);
 if (conflict.isErr()) {

@@ -3,7 +3,12 @@ import { join, resolve } from "node:path";
 import { expandHomePath } from "./roots.js";
 import type { LoggingConfig, LogFormat, LogLevel } from "./logger.js";
 import type { OAuthConfig } from "./oauth-provider.js";
-import { devspaceAgentsDir, devspaceSkillsDir, loadDevspaceFiles } from "./user-config.js";
+import {
+  devspaceAgentsDir,
+  devspaceSkillsDir,
+  loadDevspaceFiles,
+  type UpstreamMcpServerConfig,
+} from "./user-config.js";
 import { resolveSubagentsConfig, type SubagentsConfig } from "./local-agent-config.js";
 
 export type ToolMode = "minimal" | "full" | "codex";
@@ -11,6 +16,11 @@ export type WidgetMode = "off" | "changes" | "full";
 const DEFAULT_OAUTH_ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
 const DEFAULT_OAUTH_REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
 const DEFAULT_ARTIFACT_MAX_FILE_BYTES = 100 * 1024 * 1024;
+const DEFAULT_UPSTREAM_MCP_SERVERS: UpstreamMcpServerConfig[] = [
+  { name: "unity", url: "http://127.0.0.1:8080/mcp" },
+  { name: "unreal", url: "http://127.0.0.1:8001/mcp" },
+  { name: "blockbench", url: "http://127.0.0.1:8002/mcp", enabled: false },
+];
 
 export interface ServerConfig {
   host: string;
@@ -32,6 +42,7 @@ export interface ServerConfig {
   subagents: SubagentsConfig;
   agentDir: string;
   logging: LoggingConfig;
+  upstreamMcpServers: UpstreamMcpServerConfig[];
 }
 
 function parsePort(value: string | number | undefined): number {
@@ -190,6 +201,7 @@ function parseOAuthConfig(env: NodeJS.ProcessEnv, ownerToken: string | undefined
     scopes: parseStringList(env.DEVSPACE_OAUTH_SCOPES, ["devspace"]),
     allowedRedirectHosts: parseStringList(env.DEVSPACE_OAUTH_ALLOWED_REDIRECT_HOSTS, [
       "chatgpt.com",
+      "openai.com",
       "localhost",
       "127.0.0.1",
     ]),
@@ -251,6 +263,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     subagents: resolveSubagentsConfig(files.config.subagents, env),
     agentDir: resolve(expandHomePath(env.DEVSPACE_AGENT_DIR ?? files.config.agentDir ?? defaultAgentDir())),
     logging: parseLoggingConfig(env),
+    upstreamMcpServers: files.config.upstreamMcpServers ?? DEFAULT_UPSTREAM_MCP_SERVERS,
   };
 }
 

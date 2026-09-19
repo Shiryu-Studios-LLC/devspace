@@ -110,7 +110,7 @@ export class CodexAppServerRuntime implements LocalAgentRuntime {
   async initialize(): Promise<void> {
     await this.rpc.request("initialize", {
       clientInfo: { name: "devspace", title: "DevSpace", version: "1.0.7" },
-      capabilities: {},
+      capabilities: { experimentalApi: true },
     });
     this.rpc.notify("initialized");
   }
@@ -455,6 +455,7 @@ function threadParams(input: LocalAgentRunInput): Record<string, unknown> {
   return {
     ...(input.providerSessionId ? { threadId: input.providerSessionId } : {}),
     cwd: input.workspaceRoot,
+    runtimeWorkspaceRoots: [input.workspaceRoot],
     approvalPolicy: "never",
     sandbox: sandboxFor(input.writeMode),
     ...(input.model ? { model: input.model } : {}),
@@ -466,7 +467,7 @@ function turnParams(input: LocalAgentRunInput, threadId: string): Record<string,
     threadId,
     input: [{ type: "text", text: input.prompt }],
     approvalPolicy: "never",
-    sandboxPolicy: sandboxPolicyFor(input.writeMode),
+    sandboxPolicy: sandboxPolicyFor(input.writeMode, input.workspaceRoot),
     ...(input.model ? { model: input.model } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
   };
@@ -481,9 +482,12 @@ export function sandboxFor(writeMode: LocalAgentWriteMode | undefined): string {
   }
 }
 
-function sandboxPolicyFor(writeMode: LocalAgentWriteMode | undefined): Record<string, string> {
+function sandboxPolicyFor(
+  writeMode: LocalAgentWriteMode | undefined,
+  workspaceRoot: string,
+): Record<string, unknown> {
   switch (writeMode) {
-    case "allowed": return { type: "workspaceWrite" };
+    case "allowed": return { type: "workspaceWrite", writableRoots: [workspaceRoot] };
     case "full_access": return { type: "dangerFullAccess" };
     case "read_only":
     case undefined: return { type: "readOnly" };

@@ -13,9 +13,10 @@ import { buildLocalAgentProviderStatuses } from "./local-agent-catalog.js";
 import type { SubagentsConfig } from "./local-agent-config.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { ProcessSessionManager } from "./process-sessions.js";
-import { createMcpServer } from "./server.js";
+import { createMcpServer, createServer } from "./server.js";
 import { SqliteWorkspaceStore } from "./workspace-store.js";
 import { WorkspaceRegistry } from "./workspaces.js";
+import type { AddressInfo } from "node:net";
 
 const execFileAsync = promisify(execFile);
 
@@ -264,6 +265,118 @@ test("checkout reuse and context suppression survive a registry restart", async 
     assert.equal(structuredContent(restored).agentsFiles, undefined);
   } finally {
     await closeRestored();
+  }
+});
+
+test("HTTP server exposes OAuth discovery, OpenID configuration, and client registration endpoints", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "devspace-http-oauth-test-"));
+  const stateDir = join(root, ".state");
+  const config = loadConfig({
+    DEVSPACE_CONFIG_DIR: join(root, ".config"),
+    DEVSPACE_ALLOWED_ROOTS: root,
+    DEVSPACE_STATE_DIR: stateDir,
+    DEVSPACE_OAUTH_OWNER_TOKEN: "test-owner-token-that-is-long-enough",
+    DEVSPACE_OAUTH_ALLOWED_REDIRECT_HOSTS: "chatgpt.com,openai.com",
+    DEVSPACE_PUBLIC_BASE_URL: "http://127.0.0.1:7676",
+    DEVSPACE_ALLOWED_HOSTS: "*",
+    PORT: "7676",
+  });
+
+  const runningServer = createServer(config);
+  const httpServer = runningServer.app.listen(0, "127.0.0.1");
+  await new Promise((resolveListen) => httpServer.once("listening", resolveListen));
+  const port = (httpServer.address() as AddressInfo).port;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  const close = async () => {
+    await new Promise<void>((resolveClose) => httpServer.close(() => resolveClose()));
+    await runningServer.close();
+    await rm(root, { recursive: true, force: true });
+  };
+  t.after(close);
+
+  try {
+    // 1. Health check
+    const healthRes = await fetch(`${baseUrl}/healthz`);
+    assert.equal(healthRes.status, 200);
+    const health = await healthRes.json() as { ok: boolean };
+    assert.equal(health.ok, true);
+
+    // 2. OpenID configuration discovery endpoint
+    const openidRes = await fetch(`${baseUrl}/.well-known/openid-configuration`);
+    assert.equal(openidRes.status, 200);
+    const openidData = await openidRes.json() as {
+      issuer: string;
+      authorization_endpoint: string;
+      token_endpoint: string;
+      registration_endpoint: string;
+      response_types_supported: string[];
+    };
+    assert.ok(openidData.issuer);
+    assert.ok(openidData.authorization_endpoint.endsWith("/authorize"));
+    assert.ok(openidData.token_endpoint.endsWith("/token"));
+    assert.ok(openidData.registration_endpoint.endsWith("/register"));
+    assert.deepEqual(openidData.response_types_supported, ["code"]);
+
+    // 3. OAuth authorization server metadata
+    const oauthMetaRes = await fetch(`${baseUrl}/.well-known/oauth-authorization-server`);
+    assert.equal(oauthMetaRes.status, 200);
+    const oauthMetaData = await oauthMetaRes.json() as { authorization_endpoint: string };
+    assert.ok(oauthMetaData.authorization_endpoint);
+
+    // 4. Protected resource metadata (root & path-specific)
+    const rootPrmRes = await fetch(`${baseUrl}/.well-known/oauth-protected-resource`);
+    assert.equal(rootPrmRes.status, 200);
+    const rootPrmData = await rootPrmRes.json() as { resource: string; authorization_servers: string[] };
+    assert.ok(rootPrmData.resource);
+    assert.ok(rootPrmData.authorization_servers.length > 0);
+
+    const pathPrmRes = await fetch(`${baseUrl}/.well-known/oauth-protected-resource/mcp`);
+    assert.equal(pathPrmRes.status, 200);
+
+    // 5. Unauthenticated request to /mcp returns 401 with WWW-Authenticate header
+    const unauthMcpRes = await fetch(`${baseUrl}/mcp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "tools/list", id: 1 }),
+    });
+    assert.equal(unauthMcpRes.status, 401);
+    const wwwAuth = unauthMcpRes.headers.get("www-authenticate");
+    assert.ok(wwwAuth?.includes("Bearer"));
+    assert.ok(wwwAuth?.includes("resource_metadata="));
+
+    // 6. Dynamic Client Registration (RFC 7591) for ChatGPT
+    const registerRes = await fetch(`${baseUrl}/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client_name: "ChatGPT",
+        redirect_uris: ["https://chatgpt.com/connector_platform_oauth_redirect"],
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+      }),
+    });
+    assert.equal(registerRes.status, 201);
+    const clientInfo = await registerRes.json() as {
+      client_id: string;
+      client_secret?: string;
+      redirect_uris: string[];
+      token_endpoint_auth_method: string;
+    };
+    assert.ok(clientInfo.client_id);
+    assert.deepEqual(clientInfo.redirect_uris, ["https://chatgpt.com/connector_platform_oauth_redirect"]);
+
+    // 7. GET /authorize returns HTML form
+    const authorizeRes = await fetch(
+      `${baseUrl}/authorize?response_type=code&client_id=${encodeURIComponent(clientInfo.client_id)}&redirect_uri=${encodeURIComponent("https://chatgpt.com/connector_platform_oauth_redirect")}&code_challenge=xyz123&code_challenge_method=S256`,
+    );
+    assert.equal(authorizeRes.status, 200);
+    const html = await authorizeRes.text();
+    assert.ok(html.includes("Connect DevSpace"));
+    assert.ok(html.includes("ChatGPT"));
+    assert.ok(html.includes("owner_token"));
+  } finally {
+    await close();
   }
 });
 

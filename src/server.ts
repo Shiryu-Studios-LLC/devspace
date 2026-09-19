@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { access, realpath } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
+import { hostHeaderValidation, localhostHostValidation } from "@modelcontextprotocol/sdk/server/middleware/hostHeaderValidation.js";
 import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -56,6 +56,7 @@ import { registerLocalWindowsTools } from "./local-windows-tools.js";
 import { openAiConversationScopeId } from "./request-meta.js";
 import { shutdownHttpServer } from "./server-shutdown.js";
 import { formatPathForPrompt } from "./skills.js";
+import { registerUpstreamMcpTools } from "./upstream-mcp.js";
 import { createWorkspaceStore } from "./workspace-store.js";
 import { formatAgentsPath, WorkspaceRegistry } from "./workspaces.js";
 import {
@@ -104,7 +105,7 @@ const AGENT_EXEC_TOOL_ANNOTATIONS = {
 };
 
 interface RunningServer {
-  app: ReturnType<typeof createMcpExpressApp>;
+  app: express.Express;
   config: ServerConfig;
   localAgentProviders: LocalAgentProviderStatus[];
   close(): Promise<void>;
@@ -783,6 +784,8 @@ export function createMcpServer(
       instructions: serverInstructions(config),
     },
   );
+
+  registerUpstreamMcpTools(server, config);
 
   registerAppResource(
     server,
@@ -1946,16 +1949,21 @@ export function createServer(
 ): RunningServer {
   const incomingArtifactAdapters = options.incomingArtifactAdapters
     ?? [createOpenAIIncomingArtifactAdapter()];
-  const allowedHosts = config.allowedHosts.includes("*")
-    ? undefined
-    : Array.from(new Set([config.host, ...config.allowedHosts]));
-  const app = createMcpExpressApp({
-    host: config.host,
-    ...(allowedHosts ? { allowedHosts } : {}),
-  });
+  const app = express();
+  app.use(express.json());
+  if (!config.allowedHosts.includes("*")) {
+    const localhostHosts = ["127.0.0.1", "localhost", "::1"];
+    const allowedHosts = Array.from(new Set([config.host, ...config.allowedHosts]));
+    if (allowedHosts.length > 0) {
+      app.use(hostHeaderValidation(allowedHosts));
+    } else if (localhostHosts.includes(config.host)) {
+      app.use(localhostHostValidation());
+    }
+  }
   const transports = new McpSessionRegistry<Transport>();
   const mcpUrl = new URL("/mcp", config.publicBaseUrl);
   const resourceServerUrl = resourceUrlFromServerUrl(mcpUrl);
+  const oauthIssuerUrl = new URL(config.publicBaseUrl);
   const oauthProvider = new SingleUserOAuthProvider(config.oauth, mcpUrl, config.stateDir);
   const bearerAuth = requireBearerAuth({
     verifier: oauthProvider,
@@ -2004,13 +2012,30 @@ export function createServer(
       .closeIdle(MCP_SESSION_IDLE_TIMEOUT_MS)
       .then((results) => logSessionCloseResults("idle_timeout", results));
   }, MCP_SESSION_CLEANUP_INTERVAL_MS);
-  sessionCleanupTimer.unref();
-
   if (config.logging.trustProxy) {
     app.set("trust proxy", true);
   }
 
   app.use((req, res, next) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, mcp-session-id, Range, X-Requested-With",
+    );
+    res.setHeader("Access-Control-Expose-Headers", "WWW-Authenticate, mcp-session-id");
+    if (req.method === "OPTIONS") {
+      res.sendStatus(204);
+      return;
+    }
+    next();
+  });
+
+  app.use((req, res, next) => {
+    // Normalize duplicate slashes in request paths
+    if (req.url && req.url.includes("//")) {
+      req.url = req.url.replace(/\/{2,}/g, "/");
+    }
     const requestId = randomUUID();
     const startedAt = performance.now();
     res.locals.requestId = requestId;
@@ -2033,16 +2058,77 @@ export function createServer(
     next();
   });
 
+  const oauthMetadata = {
+    issuer: oauthIssuerUrl.origin,
+    authorization_endpoint: new URL("/authorize", oauthIssuerUrl).href,
+    token_endpoint: new URL("/token", oauthIssuerUrl).href,
+    registration_endpoint: new URL("/register", oauthIssuerUrl).href,
+    response_types_supported: ["code"],
+    code_challenge_methods_supported: ["S256"],
+    token_endpoint_auth_methods_supported: ["client_secret_post", "none"],
+    grant_types_supported: ["authorization_code", "refresh_token"],
+    scopes_supported: config.oauth.scopes,
+  };
+
+  const protectedResourceMetadata = {
+    resource: resourceServerUrl.href,
+    authorization_servers: [oauthIssuerUrl.origin],
+    scopes_supported: config.oauth.scopes,
+    resource_name: "DevSpace",
+  };
+
+  // Support OpenID Configuration & root Protected Resource discovery aliases for various OAuth clients
+  app.get("/.well-known/openid-configuration", (_req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Cache-Control", "public, max-age=3600");
+    res.status(200).json(oauthMetadata);
+  });
+
+  app.get("/.well-known/oauth-protected-resource", (_req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Cache-Control", "public, max-age=3600");
+    res.status(200).json(protectedResourceMetadata);
+  });
+
+  // Support client_secret_basic Authorization header on /token if body fields are omitted
+  app.use("/token", express.urlencoded({ extended: false }), (req, res, next) => {
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith("Basic ") && (!req.body || !req.body.client_id)) {
+      try {
+        const credentials = Buffer.from(authHeader.slice(6), "base64").toString("utf8");
+        const colonIndex = credentials.indexOf(":");
+        if (colonIndex !== -1) {
+          req.body = req.body || {};
+          req.body.client_id = decodeURIComponent(credentials.slice(0, colonIndex));
+          req.body.client_secret = decodeURIComponent(credentials.slice(colonIndex + 1));
+        }
+      } catch {
+        // Continue to let OAuth handlers process as standard
+      }
+    }
+    next();
+  });
+
   app.use(
     mcpAuthRouter({
       provider: oauthProvider,
-      issuerUrl: new URL(config.publicBaseUrl),
-      baseUrl: new URL(config.publicBaseUrl),
+      issuerUrl: oauthIssuerUrl,
+      baseUrl: oauthIssuerUrl,
       resourceServerUrl,
       scopesSupported: config.oauth.scopes,
       resourceName: "DevSpace",
+      clientRegistrationOptions: { rateLimit: false },
+      authorizationOptions: { rateLimit: false },
+      tokenOptions: { rateLimit: false },
     }),
   );
+
+  app.options("/mcp", (_req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, mcp-session-id");
+    res.sendStatus(204);
+  });
 
   app.options("/mcp-app-assets/{*asset}", (_req, res) => {
     setAssetHeaders(res);
@@ -2064,6 +2150,13 @@ export function createServer(
   });
 
   app.all("/mcp", async (req, res) => {
+    if (req.method === "OPTIONS") {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, mcp-session-id");
+      res.sendStatus(204);
+      return;
+    }
     const requestId = res.locals.requestId as string | undefined;
     const sessionId = req.header("mcp-session-id");
     const initializeRequest = req.method === "POST" && isInitializeRequest(req.body);
@@ -2076,7 +2169,7 @@ export function createServer(
     });
     if (res.headersSent) return;
 
-    if (!req.auth?.resource || !checkResourceAllowed({ requestedResource: req.auth.resource, configuredResource: resourceServerUrl })) {
+    if (req.auth?.resource && !oauthProvider.isResourceAllowed(req.auth.resource)) {
       logEvent(config.logging, "warn", "auth_denied", {
         requestId,
         method: req.method,

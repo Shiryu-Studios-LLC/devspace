@@ -25,7 +25,7 @@ export interface PersistedTokenPair {
   refreshToken: PersistedRefreshTokenRecord;
 }
 
-function redirectHostAllowed(redirectUri: string, allowedHosts: string[]): boolean {
+export function redirectHostAllowed(redirectUri: string, allowedHosts: string[]): boolean {
   let parsed: URL;
   try {
     parsed = new URL(redirectUri);
@@ -33,8 +33,19 @@ function redirectHostAllowed(redirectUri: string, allowedHosts: string[]): boole
     return false;
   }
 
-  if (["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname)) return true;
-  return allowedHosts.includes(parsed.hostname);
+  const hostname = parsed.hostname.toLowerCase();
+  if (["localhost", "127.0.0.1", "[::1]"].includes(hostname)) return true;
+  if (allowedHosts.includes("*")) return true;
+
+  return allowedHosts.some((allowed) => {
+    const cleanAllowed = allowed.trim().toLowerCase();
+    if (!cleanAllowed) return false;
+    if (cleanAllowed === "*") return true;
+    if (hostname === cleanAllowed) return true;
+    if (cleanAllowed.startsWith("*.") && hostname.endsWith(cleanAllowed.slice(1))) return true;
+    if (hostname.endsWith(`.${cleanAllowed}`)) return true;
+    return false;
+  });
 }
 
 export class SqliteOAuthStore {
@@ -54,7 +65,10 @@ export class SqliteOAuthStore {
   }
 
   registerClient(
-    client: Omit<OAuthClientInformationFull, "client_id" | "client_id_issued_at">,
+    client: Omit<OAuthClientInformationFull, "client_id" | "client_id_issued_at"> & {
+      client_id?: string;
+      client_id_issued_at?: number;
+    },
     allowedRedirectHosts: string[],
   ): OAuthClientInformationFull {
     if (!client.redirect_uris.every((uri) => redirectHostAllowed(String(uri), allowedRedirectHosts))) {
@@ -62,18 +76,20 @@ export class SqliteOAuthStore {
     }
 
     const now = Math.floor(Date.now() / 1000);
+    const authMethod = client.token_endpoint_auth_method
+      ?? (client.client_secret ? "client_secret_post" : "none");
     const registered: OAuthClientInformationFull = {
       ...client,
-      client_id: `devspace-${randomUUID()}`,
-      client_id_issued_at: now,
-      token_endpoint_auth_method: client.token_endpoint_auth_method ?? "none",
+      client_id: client.client_id ?? `devspace-${randomUUID()}`,
+      client_id_issued_at: client.client_id_issued_at ?? now,
+      token_endpoint_auth_method: authMethod,
       grant_types: client.grant_types ?? ["authorization_code", "refresh_token"],
       response_types: client.response_types ?? ["code"],
     };
 
     this.database.sqlite
       .prepare("insert into oauth_clients (client_id, client_json, issued_at) values (?, ?, ?)")
-      .run(registered.client_id, JSON.stringify(registered), now);
+      .run(registered.client_id, JSON.stringify(registered), registered.client_id_issued_at);
 
     return registered;
   }
@@ -198,7 +214,10 @@ export class SqliteOAuthClientsStore implements OAuthRegisteredClientsStore {
   }
 
   registerClient(
-    client: Omit<OAuthClientInformationFull, "client_id" | "client_id_issued_at">,
+    client: Omit<OAuthClientInformationFull, "client_id" | "client_id_issued_at"> & {
+      client_id?: string;
+      client_id_issued_at?: number;
+    },
   ): OAuthClientInformationFull {
     return this.store.registerClient(client, this.allowedRedirectHosts);
   }

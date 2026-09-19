@@ -61,10 +61,18 @@ const output = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
 readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const message = JSON.parse(line);
   if (message.method === "initialize") {
+    if (message.params.capabilities.experimentalApi !== true) {
+      output({ id: message.id, error: { code: -32602, message: "experimental API capability not enabled" } });
+      return;
+    }
     output({ id: message.id, result: { userAgent: "fake" } });
     return;
   }
   if (message.method === "thread/start" || message.method === "thread/resume") {
+    if (JSON.stringify(message.params.runtimeWorkspaceRoots) !== JSON.stringify(["/tmp/project"])) {
+      output({ id: message.id, error: { code: -32602, message: "missing runtime workspace root" } });
+      return;
+    }
     output({ id: message.id, result: { thread: { id: message.params.threadId || "thread_new" } } });
     return;
   }
@@ -73,6 +81,11 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     return;
   }
   if (message.method === "turn/start") {
+    if (message.params.sandboxPolicy.type === "workspaceWrite"
+      && JSON.stringify(message.params.sandboxPolicy.writableRoots) !== JSON.stringify(["/tmp/project"])) {
+      output({ id: message.id, error: { code: -32602, message: "missing writable workspace root" } });
+      return;
+    }
     turn += 1;
     const turnId = "turn_" + turn;
     output({ id: message.id, result: { turn: { id: turnId } } });

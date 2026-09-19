@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Unreal Engine Project
+Comment=Open an Unreal Engine project with its associated engine version
+Exec=/home/okashi/Unreal/Engine/Binaries/Linux/UnrealEditor %f -graphicsadapter=1
+Icon=/home/okashi/Unreal/Engine/Content/Editor/Slate/About/UnrealLogo.svg
+Terminal=false
+NoDisplay=true
+StartupNotify=true
+MimeType=application/x-uproject;
