@@ -18,7 +18,12 @@ import {
   type DesktopAgentRequest,
   type DesktopAgentStatus,
   type DesktopCapabilityStatus,
+  type DesktopWindowInfo,
 } from "./desktop-agent-protocol.js";
+import {
+  kdeWindowAwarenessAvailable,
+  listKdeWindows,
+} from "./desktop-windows-kde.js";
 
 const MAX_REQUEST_BYTES = 128 * 1024;
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -27,6 +32,7 @@ export interface DesktopAgentDaemonOptions {
   stateDir: string;
   paths?: DesktopAgentPaths;
   capabilities?: () => DesktopCapabilityStatus[];
+  windows?: () => Promise<DesktopWindowInfo[]>;
   now?: () => number;
   onClosed?: () => void;
 }
@@ -35,6 +41,7 @@ export class DesktopAgentDaemon {
   readonly paths: DesktopAgentPaths;
   private readonly lock: DesktopAgentLock;
   private readonly capabilitiesProvider: () => DesktopCapabilityStatus[];
+  private readonly windowsProvider: () => Promise<DesktopWindowInfo[]>;
   private readonly now: () => number;
   private readonly onClosed?: () => void;
   private readonly sockets = new Set<Socket>();
@@ -49,6 +56,7 @@ export class DesktopAgentDaemon {
     this.paths = options.paths ?? desktopAgentPaths(options.stateDir);
     this.lock = new DesktopAgentLock(this.paths);
     this.capabilitiesProvider = options.capabilities ?? defaultDesktopCapabilities;
+    this.windowsProvider = options.windows ?? listKdeWindows;
     this.now = options.now ?? Date.now;
     this.onClosed = options.onClosed;
   }
@@ -174,7 +182,7 @@ export class DesktopAgentDaemon {
         ? String((parsed as { requestId: string }).requestId)
         : "";
       const request = decodeDesktopAgentRequest(parsed);
-      const result = this.dispatch(request);
+      const result = await this.dispatch(request);
       socket.end(encodeDesktopAgentResponse({
         requestId: request.requestId,
         protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
@@ -194,7 +202,7 @@ export class DesktopAgentDaemon {
     }
   }
 
-  private dispatch(request: DesktopAgentRequest): unknown {
+  private async dispatch(request: DesktopAgentRequest): Promise<unknown> {
     if (request.protocolVersion !== DESKTOP_AGENT_PROTOCOL_VERSION) {
       throw new DesktopAgentProtocolError(
         "DESKTOP_AGENT_PROTOCOL_MISMATCH",
@@ -212,6 +220,16 @@ export class DesktopAgentDaemon {
         return this.status();
       case "desktop.capabilities":
         return this.capabilitiesProvider();
+      case "windows.list": {
+        const windowsCapability = this.capabilitiesProvider().find((capability) => capability.id === "windows");
+        if (windowsCapability?.state !== "ready") {
+          throw new DesktopAgentProtocolError(
+            "DESKTOP_WINDOWS_UNAVAILABLE",
+            windowsCapability?.detail ?? "Window awareness is unavailable.",
+          );
+        }
+        return this.windowsProvider();
+      }
       case "desktop.stop":
         this.stopping = true;
         return this.status();
@@ -246,8 +264,11 @@ export class DesktopAgentDaemon {
 }
 
 export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
+  const windowsReady = kdeWindowAwarenessAvailable();
   return [
-    { id: "windows", state: "not_implemented" },
+    windowsReady
+      ? { id: "windows", state: "ready", detail: "KDE/KWin D-Bus window inventory" }
+      : { id: "windows", state: "unavailable", detail: "KDE/KWin graphical session is unavailable" },
     { id: "screen", state: "not_implemented" },
     { id: "input", state: "not_implemented" },
     { id: "accessibility", state: "not_implemented" },

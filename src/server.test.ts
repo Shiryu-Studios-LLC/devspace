@@ -203,6 +203,7 @@ test("module status keeps core health separate from secondary modules", async (t
   for (const name of [
     "desktop_agent_status",
     "desktop_agent_capabilities",
+    "desktop_list_windows",
     "desktop_agent_stop",
   ]) {
     assert.equal(

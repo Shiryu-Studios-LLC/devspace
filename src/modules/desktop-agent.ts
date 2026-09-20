@@ -9,6 +9,7 @@ import {
 import type {
   DesktopAgentStatus,
   DesktopCapabilityStatus,
+  DesktopWindowInfo,
 } from "../desktop-agent-protocol.js";
 
 const readAnnotations = {
@@ -84,6 +85,66 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
 
   registerAppTool(
     server,
+    "desktop_list_windows",
+    {
+      title: "List Desktop Windows",
+      description:
+        "List currently known KDE/KWin windows from the isolated desktop agent, including application identity, process identity, geometry, desktop membership, and window state. Read-only.",
+      inputSchema: {},
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        windows: z.array(z.object({
+          id: z.string(),
+          uuid: z.string(),
+          title: z.string(),
+          pid: z.number().int().optional(),
+          processName: z.string().optional(),
+          executable: z.string().optional(),
+          applicationId: z.string().optional(),
+          desktopFile: z.string().optional(),
+          resourceClass: z.string().optional(),
+          resourceName: z.string().optional(),
+          role: z.string().optional(),
+          clientMachine: z.string().optional(),
+          x: z.number().optional(),
+          y: z.number().optional(),
+          width: z.number().optional(),
+          height: z.number().optional(),
+          minimized: z.boolean(),
+          fullscreen: z.boolean(),
+          maximizedHorizontal: z.boolean(),
+          maximizedVertical: z.boolean(),
+          keepAbove: z.boolean(),
+          keepBelow: z.boolean(),
+          skipTaskbar: z.boolean(),
+          skipPager: z.boolean(),
+          skipSwitcher: z.boolean(),
+          noBorder: z.boolean(),
+          excludeFromCapture: z.boolean(),
+          desktops: z.array(z.string()),
+          activities: z.array(z.string()),
+        })).optional(),
+      },
+      _meta: {},
+      annotations: readAnnotations,
+    },
+    async () => {
+      try {
+        const windows = await client.windows();
+        const result = formatWindowSummary(windows);
+        return {
+          content: [{ type: "text" as const, text: result }],
+          structuredContent: { status: "ready" as const, result, windows },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
     "desktop_agent_stop",
     {
       title: "Stop Desktop Agent",
@@ -148,6 +209,15 @@ function describeStatus(status: DesktopAgentStatus): string {
     `session ${status.sessionType}`,
     `protocol ${status.protocolVersion}`,
   ].join("; ");
+}
+
+function formatWindowSummary(windows: DesktopWindowInfo[]): string {
+  const visible = windows.filter((window) => !window.skipTaskbar);
+  const applications = new Set(
+    visible.map((window) => window.applicationId || window.processName || window.resourceClass || window.title)
+      .filter((value): value is string => Boolean(value)),
+  );
+  return `Desktop agent sees ${windows.length} window(s), ${visible.length} taskbar-visible, across ${applications.size} application identity/identities.`;
 }
 
 function formatCapabilities(

@@ -53,7 +53,7 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 
 ## Desktop modules
 
-- [ ] Linux window/application awareness.
+- [x] Linux KDE/Wayland window/application awareness using KWin D-Bus window enumeration and per-window metadata, enriched with safe process identity from `/proc`.
 - [ ] Monitor/display awareness.
 - [ ] Screenshot/window/region capture.
 - [ ] AT-SPI accessibility tree and semantic UI actions.

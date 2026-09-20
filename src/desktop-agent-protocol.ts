@@ -20,10 +20,43 @@ export interface DesktopAgentStatus {
   capabilities: DesktopCapabilityStatus[];
 }
 
+export interface DesktopWindowInfo {
+  id: string;
+  uuid: string;
+  title: string;
+  pid?: number;
+  processName?: string;
+  executable?: string;
+  applicationId?: string;
+  desktopFile?: string;
+  resourceClass?: string;
+  resourceName?: string;
+  role?: string;
+  clientMachine?: string;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  minimized: boolean;
+  fullscreen: boolean;
+  maximizedHorizontal: boolean;
+  maximizedVertical: boolean;
+  keepAbove: boolean;
+  keepBelow: boolean;
+  skipTaskbar: boolean;
+  skipPager: boolean;
+  skipSwitcher: boolean;
+  noBorder: boolean;
+  excludeFromCapture: boolean;
+  desktops: string[];
+  activities: string[];
+}
+
 export type DesktopAgentMethod =
   | "hello"
   | "desktop.status"
   | "desktop.capabilities"
+  | "windows.list"
   | "desktop.stop";
 
 export type DesktopAgentRequest = {
@@ -129,8 +162,51 @@ export function decodeDesktopAgentStatus(value: unknown): DesktopAgentStatus {
   };
 }
 
+export function decodeDesktopWindowList(value: unknown): DesktopWindowInfo[] {
+  if (!Array.isArray(value)) {
+    throw new DesktopAgentProtocolError("INVALID_WINDOWS", "Desktop agent returned an invalid window list.");
+  }
+  return value.map(decodeDesktopWindowInfo);
+}
+
 export function desktopAgentProtocolVersion(): number {
   return DESKTOP_AGENT_PROTOCOL_VERSION;
+}
+
+function decodeDesktopWindowInfo(value: unknown): DesktopWindowInfo {
+  const record = asRecord(value);
+  if (!record) throw new DesktopAgentProtocolError("INVALID_WINDOWS", "Desktop window must be an object.");
+  return {
+    id: requiredString(record.id, "window.id"),
+    uuid: requiredString(record.uuid, "window.uuid"),
+    title: typeof record.title === "string" ? record.title : "",
+    pid: optionalInteger(record.pid),
+    processName: optionalString(record.processName),
+    executable: optionalString(record.executable),
+    applicationId: optionalString(record.applicationId),
+    desktopFile: optionalString(record.desktopFile),
+    resourceClass: optionalString(record.resourceClass),
+    resourceName: optionalString(record.resourceName),
+    role: optionalString(record.role),
+    clientMachine: optionalString(record.clientMachine),
+    x: optionalNumber(record.x),
+    y: optionalNumber(record.y),
+    width: optionalNumber(record.width),
+    height: optionalNumber(record.height),
+    minimized: requiredBoolean(record.minimized, "window.minimized"),
+    fullscreen: requiredBoolean(record.fullscreen, "window.fullscreen"),
+    maximizedHorizontal: requiredBoolean(record.maximizedHorizontal, "window.maximizedHorizontal"),
+    maximizedVertical: requiredBoolean(record.maximizedVertical, "window.maximizedVertical"),
+    keepAbove: requiredBoolean(record.keepAbove, "window.keepAbove"),
+    keepBelow: requiredBoolean(record.keepBelow, "window.keepBelow"),
+    skipTaskbar: requiredBoolean(record.skipTaskbar, "window.skipTaskbar"),
+    skipPager: requiredBoolean(record.skipPager, "window.skipPager"),
+    skipSwitcher: requiredBoolean(record.skipSwitcher, "window.skipSwitcher"),
+    noBorder: requiredBoolean(record.noBorder, "window.noBorder"),
+    excludeFromCapture: requiredBoolean(record.excludeFromCapture, "window.excludeFromCapture"),
+    desktops: stringArray(record.desktops, "window.desktops"),
+    activities: stringArray(record.activities, "window.activities"),
+  };
 }
 
 function decodeCapabilityStatus(value: unknown): DesktopCapabilityStatus {
@@ -150,6 +226,7 @@ function isDesktopAgentMethod(value: string): value is DesktopAgentMethod {
   return value === "hello"
     || value === "desktop.status"
     || value === "desktop.capabilities"
+    || value === "windows.list"
     || value === "desktop.stop";
 }
 
@@ -177,4 +254,26 @@ function requiredInteger(value: unknown, field: string): number {
 
 function optionalBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
+}
+
+function requiredBoolean(value: unknown, field: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new DesktopAgentProtocolError("INVALID_WINDOWS", `Invalid ${field}.`);
+  }
+  return value;
+}
+
+function optionalInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) ? value : undefined;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function stringArray(value: unknown, field: string): string[] {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw new DesktopAgentProtocolError("INVALID_WINDOWS", `Invalid ${field}.`);
+  }
+  return value as string[];
 }

@@ -12,12 +12,14 @@ import {
 import {
   decodeDesktopAgentResponse,
   decodeDesktopAgentStatus,
+  decodeDesktopWindowList,
   encodeDesktopAgentRequest,
   type DesktopAgentMethod,
   type DesktopAgentRequest,
   type DesktopAgentResponse,
   type DesktopAgentStatus,
   type DesktopCapabilityStatus,
+  type DesktopWindowInfo,
 } from "./desktop-agent-protocol.js";
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 8_000;
@@ -80,6 +82,11 @@ export class DesktopAgentClient {
       throw new DesktopAgentClientError("DESKTOP_AGENT_INVALID_RESPONSE", "Desktop agent returned invalid capabilities.");
     }
     return result.map((item) => decodeCapability(item));
+  }
+
+  async windows(): Promise<DesktopWindowInfo[]> {
+    await this.ensureReady();
+    return decodeDesktopWindowList(await this.requestExisting("windows.list"));
   }
 
   async stop(): Promise<DesktopAgentStatus | undefined> {

@@ -18,7 +18,21 @@ import {
 test("desktop agent serves authenticated status and capability requests", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-test-"));
   t.after(() => rm(stateDir, { recursive: true, force: true }));
-  const daemon = new DesktopAgentDaemon({ stateDir });
+  const daemon = new DesktopAgentDaemon({
+    stateDir,
+    capabilities: () => [
+      { id: "windows", state: "not_implemented" },
+      { id: "screen", state: "not_implemented" },
+      { id: "input", state: "not_implemented" },
+      { id: "accessibility", state: "not_implemented" },
+      { id: "clipboard", state: "not_implemented" },
+      { id: "notifications", state: "not_implemented" },
+      { id: "audio", state: "not_implemented" },
+      { id: "devices", state: "not_implemented" },
+      { id: "network", state: "not_implemented" },
+      { id: "events", state: "not_implemented" },
+    ],
+  });
   t.after(() => daemon.close());
   const started = await daemon.start();
   assert.equal(started.state, "ready");
@@ -42,6 +56,55 @@ test("desktop agent serves authenticated status and capability requests", async 
   }));
   assert.equal(unauthorized.ok, false);
   if (!unauthorized.ok) assert.equal(unauthorized.error.code, "DESKTOP_AGENT_UNAUTHORIZED");
+});
+
+test("desktop agent serves a structured read-only window inventory", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-windows-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const expectedWindow = {
+    id: "{11111111-2222-3333-4444-555555555555}",
+    uuid: "{11111111-2222-3333-4444-555555555555}",
+    title: "Shiryu Audio Mixer",
+    pid: 2516,
+    processName: "shiryu-audio",
+    executable: "/opt/ShiryuAudio/shiryu-audio",
+    applicationId: "shiryu-audio",
+    desktopFile: "shiryu-audio",
+    resourceClass: "Shiryu Audio",
+    resourceName: "shiryu audio",
+    role: "browser-window",
+    clientMachine: "localhost",
+    x: 360,
+    y: 299,
+    width: 869,
+    height: 594,
+    minimized: false,
+    fullscreen: false,
+    maximizedHorizontal: false,
+    maximizedVertical: false,
+    keepAbove: false,
+    keepBelow: false,
+    skipTaskbar: false,
+    skipPager: false,
+    skipSwitcher: false,
+    noBorder: false,
+    excludeFromCapture: false,
+    desktops: ["desktop-1"],
+    activities: ["activity-1"],
+  };
+  const daemon = new DesktopAgentDaemon({
+    stateDir,
+    capabilities: () => [{ id: "windows", state: "ready" }],
+    windows: async () => [expectedWindow],
+  });
+  t.after(() => daemon.close());
+  await daemon.start();
+  const client = new DesktopAgentClient({
+    stateDir,
+    spawnDaemon: () => assert.fail("existing daemon should not be respawned"),
+  });
+
+  assert.deepEqual(await client.windows(), [expectedWindow]);
 });
 
 test("desktop agent client can auto-start and stop an isolated daemon", async (t) => {
