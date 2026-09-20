@@ -45,7 +45,7 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [x] Use local authenticated IPC between DevSpace core and the desktop agent.
 - [ ] Add protocol version negotiation beyond strict version validation.
 - [x] Add capability discovery.
-- [ ] Add reconnect/backoff behavior for mid-request agent loss.
+- [x] Add bounded reconnect/backoff for mid-request desktop-agent transport loss without retrying permission, protocol, or provider errors.
 - [x] Add per-capability permissions with read-only status reporting; existing awareness modules default granted while screen/input/accessibility/clipboard/actions/filesystem-watch/browser default denied.
 - [x] Add health reporting and a kill switch.
 - [x] Ensure agent failure never terminates DevSpace core.

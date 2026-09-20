@@ -49,6 +49,7 @@ import {
 const DEFAULT_STARTUP_TIMEOUT_MS = 8_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 5_000;
 const RETRY_DELAY_MS = 50;
+const RECONNECT_BACKOFF_MS = [50, 150] as const;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 
 export class DesktopAgentClientError extends Error {
@@ -100,8 +101,7 @@ export class DesktopAgentClient {
   }
 
   async capabilities(): Promise<DesktopCapabilityStatus[]> {
-    await this.ensureReady();
-    const result = await this.requestExisting("desktop.capabilities");
+    const result = await this.requestReady("desktop.capabilities");
     if (!Array.isArray(result)) {
       throw new DesktopAgentClientError("DESKTOP_AGENT_INVALID_RESPONSE", "Desktop agent returned invalid capabilities.");
     }
@@ -109,58 +109,47 @@ export class DesktopAgentClient {
   }
 
   async permissions(): Promise<DesktopPermissionStatus[]> {
-    await this.ensureReady();
-    return decodeDesktopPermissionStatuses(await this.requestExisting("desktop.permissions"));
+    return decodeDesktopPermissionStatuses(await this.requestReady("desktop.permissions"));
   }
 
   async windows(): Promise<DesktopWindowInfo[]> {
-    await this.ensureReady();
-    return decodeDesktopWindowList(await this.requestExisting("windows.list"));
+    return decodeDesktopWindowList(await this.requestReady("windows.list"));
   }
 
   async displays(): Promise<DesktopDisplayInfo[]> {
-    await this.ensureReady();
-    return decodeDesktopDisplayList(await this.requestExisting("displays.list"));
+    return decodeDesktopDisplayList(await this.requestReady("displays.list"));
   }
 
   async processes(): Promise<DesktopProcessInfo[]> {
-    await this.ensureReady();
-    return decodeDesktopProcessList(await this.requestExisting("processes.list"));
+    return decodeDesktopProcessList(await this.requestReady("processes.list"));
   }
 
   async recentActivity(): Promise<DesktopActivityTimeline> {
-    await this.ensureReady();
-    return decodeDesktopActivityTimeline(await this.requestExisting("events.recent"));
+    return decodeDesktopActivityTimeline(await this.requestReady("events.recent"));
   }
 
   async audioGraph(): Promise<DesktopAudioGraph> {
-    await this.ensureReady();
-    return decodeDesktopAudioGraph(await this.requestExisting("audio.graph"));
+    return decodeDesktopAudioGraph(await this.requestReady("audio.graph"));
   }
 
   async devices(): Promise<DesktopDeviceInfo[]> {
-    await this.ensureReady();
-    return decodeDesktopDeviceList(await this.requestExisting("devices.list"));
+    return decodeDesktopDeviceList(await this.requestReady("devices.list"));
   }
 
   async networkSnapshot(): Promise<DesktopNetworkSnapshot> {
-    await this.ensureReady();
-    return decodeDesktopNetworkSnapshot(await this.requestExisting("network.snapshot"));
+    return decodeDesktopNetworkSnapshot(await this.requestReady("network.snapshot"));
   }
 
   async virtualDesktops(): Promise<DesktopVirtualDesktopSnapshot> {
-    await this.ensureReady();
-    return decodeDesktopVirtualDesktopSnapshot(await this.requestExisting("virtual-desktops.snapshot"));
+    return decodeDesktopVirtualDesktopSnapshot(await this.requestReady("virtual-desktops.snapshot"));
   }
 
   async logSources(): Promise<DesktopLogSource[]> {
-    await this.ensureReady();
-    return decodeDesktopLogSources(await this.requestExisting("logs.sources"));
+    return decodeDesktopLogSources(await this.requestReady("logs.sources"));
   }
 
   async readLogs(sourceId: string, options: { lines?: number; query?: string } = {}): Promise<DesktopLogReadResult> {
-    await this.ensureReady();
-    return decodeDesktopLogReadResult(await this.requestExisting("logs.read", {
+    return decodeDesktopLogReadResult(await this.requestReady("logs.read", {
       sourceId,
       ...(options.lines === undefined ? {} : { lines: options.lines }),
       ...(options.query === undefined ? {} : { query: options.query }),
@@ -168,8 +157,7 @@ export class DesktopAgentClient {
   }
 
   async traceCorrelation(correlationId: string, options: { lines?: number; query?: string } = {}): Promise<DesktopTraceCorrelation> {
-    await this.ensureReady();
-    return decodeDesktopTraceCorrelation(await this.requestExisting("trace.correlate", {
+    return decodeDesktopTraceCorrelation(await this.requestReady("trace.correlate", {
       correlationId,
       ...(options.lines === undefined ? {} : { lines: options.lines }),
       ...(options.query === undefined ? {} : { query: options.query }),
@@ -177,8 +165,7 @@ export class DesktopAgentClient {
   }
 
   async notifications(): Promise<DesktopNotificationInfo[]> {
-    await this.ensureReady();
-    return decodeDesktopNotificationList(await this.requestExisting("notifications.recent"));
+    return decodeDesktopNotificationList(await this.requestReady("notifications.recent"));
   }
 
   async stop(): Promise<DesktopAgentStatus | undefined> {
@@ -249,6 +236,18 @@ export class DesktopAgentClient {
     } catch (error) {
       if (isUnavailableError(error)) return undefined;
       throw error;
+    }
+  }
+
+  private async requestReady(method: DesktopAgentMethod, params: Record<string, unknown> = {}): Promise<unknown> {
+    for (let attempt = 0; ; attempt += 1) {
+      await this.ensureReady();
+      try {
+        return await this.requestExisting(method, params);
+      } catch (error) {
+        if (!isReconnectableError(error) || attempt >= RECONNECT_BACKOFF_MS.length) throw error;
+        await delay(RECONNECT_BACKOFF_MS[attempt]!);
+      }
     }
   }
 
@@ -373,6 +372,11 @@ function normalizeSocketError(error: unknown): DesktopAgentClientError {
 
 function isUnavailableError(error: unknown): boolean {
   return error instanceof DesktopAgentClientError && error.code === "DESKTOP_AGENT_UNAVAILABLE";
+}
+
+function isReconnectableError(error: unknown): boolean {
+  return error instanceof DesktopAgentClientError
+    && (error.code === "DESKTOP_AGENT_UNAVAILABLE" || error.code === "DESKTOP_AGENT_CONNECTION_ERROR");
 }
 
 function spawnDesktopAgent(stateDir: string): void {

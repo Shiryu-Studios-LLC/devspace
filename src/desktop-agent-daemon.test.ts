@@ -576,6 +576,44 @@ test("desktop agent serves explicit bounded log sources and reads", async (t) =>
   assert.deepEqual(await client.readLogs(expectedSources[0]!.id, { lines: 25, query: "tool_call" }), expectedLogs);
 });
 
+test("desktop agent client reconnects after mid-request agent loss", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-reconnect-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  let first!: DesktopAgentDaemon;
+  let replacement: DesktopAgentDaemon | undefined;
+  first = new DesktopAgentDaemon({
+    stateDir,
+    capabilities: () => [{ id: "windows", state: "ready" }],
+    windows: async () => {
+      await first.close();
+      return [];
+    },
+  });
+  t.after(async () => {
+    await first.close();
+    await replacement?.close();
+  });
+  await first.start();
+
+  let restarts = 0;
+  const client = new DesktopAgentClient({
+    stateDir,
+    startupTimeoutMs: 2_000,
+    spawnDaemon: () => {
+      restarts += 1;
+      replacement = new DesktopAgentDaemon({
+        stateDir,
+        capabilities: () => [{ id: "windows", state: "ready" }],
+        windows: async () => [],
+      });
+      void replacement.start();
+    },
+  });
+
+  assert.deepEqual(await client.windows(), []);
+  assert.equal(restarts, 1, "one bounded reconnect should replace the lost desktop agent");
+});
+
 test("desktop agent client can auto-start and stop an isolated daemon", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-autostart-"));
   t.after(() => rm(stateDir, { recursive: true, force: true }));
