@@ -17,9 +17,8 @@ import {
 import express from "express";
 import type { Request, Response } from "express";
 import * as z from "zod/v4";
-import { applyPatch } from "./apply-patch.js";
 import { isArtifactDownloadSupportedPlatform } from "./artifact-tools.js";
-import { loadConfig, type ServerConfig, type WidgetMode } from "./config.js";
+import { loadConfig, type ServerConfig } from "./config.js";
 import {
   createOpenAIIncomingArtifactAdapter,
   type IncomingArtifactAdapter,
@@ -28,17 +27,13 @@ import {
   logEvent,
   requestIp,
   requestPath,
-  commandPreview,
   sessionIdPrefix,
 } from "./logger.js";
 import {
-  editFileTool,
   findFilesTool,
   grepFilesTool,
   listDirectoryTool,
-  readFileTool,
   runShellTool,
-  writeFileTool,
 } from "./pi-tools.js";
 import { SingleUserOAuthProvider } from "./oauth-provider.js";
 import {
@@ -48,6 +43,8 @@ import {
 import { ProcessSessionManager, type ProcessSnapshot } from "./process-sessions.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { lateBuiltinModules, upstreamMcpModule } from "./modules/builtin.js";
+import { registerFilesystemSearchTools } from "./modules/filesystem-search.js";
+import { registerFilesystemTools } from "./modules/filesystem.js";
 import { DevSpaceModuleRegistry } from "./modules/registry.js";
 import { registerModuleStatusTool } from "./modules/status-tool.js";
 import { openAiConversationScopeId } from "./request-meta.js";
@@ -67,38 +64,28 @@ import {
 import { createLocalAgentClient } from "./local-agent-client.js";
 import { toAgentErrorPayload } from "./local-agent-errors.js";
 import type { LocalAgentRecord } from "./local-agent-store.js";
+import {
+  AGENT_EXEC_TOOL_ANNOTATIONS,
+  SHELL_TOOL_ANNOTATIONS,
+  WORKSPACE_APP_URI,
+  contentText,
+  logFailedToolResponse,
+  logToolCall,
+  resultOutputSchema,
+  textBlock,
+  textSummary,
+  toolNames,
+  toolWidgetDescriptorMeta,
+  workspaceIdDescription,
+  type ToolContent,
+} from "./tool-support.js";
 
 type Transport = StreamableHTTPServerTransport;
 // MCP clients can reconnect without closing the previous transport. Bound stale
 // session retention so abandoned MCP servers do not accumulate for the life of the process.
 const MCP_SESSION_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1_000;
 const MCP_SESSION_CLEANUP_INTERVAL_MS = 5 * 60 * 1_000;
-const WORKSPACE_APP_URI = "ui://devspace/workspace-app.html";
 const WORKSPACE_APP_MANIFEST_ENTRY = "workspace-app.html";
-const WRITE_TOOL_ANNOTATIONS = {
-  readOnlyHint: false,
-  destructiveHint: true,
-  idempotentHint: false,
-  openWorldHint: false,
-};
-const EDIT_TOOL_ANNOTATIONS = {
-  readOnlyHint: false,
-  destructiveHint: true,
-  idempotentHint: false,
-  openWorldHint: false,
-};
-const SHELL_TOOL_ANNOTATIONS = {
-  readOnlyHint: false,
-  destructiveHint: true,
-  idempotentHint: false,
-  openWorldHint: true,
-};
-const AGENT_EXEC_TOOL_ANNOTATIONS = {
-  readOnlyHint: false,
-  destructiveHint: true,
-  idempotentHint: false,
-  openWorldHint: true,
-};
 
 interface RunningServer {
   app: express.Express;
@@ -107,10 +94,6 @@ interface RunningServer {
   close(): Promise<void>;
 }
 
-type ToolContent =
-  | { type: "text"; text: string }
-  | { type: "image"; data: string; mimeType: string };
-
 interface WorkspaceAppManifestEntry {
   file: string;
   css?: string[];
@@ -118,89 +101,6 @@ interface WorkspaceAppManifestEntry {
 }
 
 type WorkspaceAppManifest = Record<string, WorkspaceAppManifestEntry>;
-
-interface DiffStats {
-  additions: number;
-  removals: number;
-}
-
-type ToolWidgetKind =
-  | "workspace"
-  | "read"
-  | "write"
-  | "edit"
-  | "search"
-  | "directory"
-  | "shell"
-  | "show_changes";
-
-interface ToolDefinitionMeta extends Record<string, unknown> {
-  ui: {
-    resourceUri: string;
-    visibility: ["model"];
-  };
-}
-
-type EmptyToolDefinitionMeta = Record<string, unknown> & {
-  "ui/resourceUri"?: string;
-};
-
-interface ToolWidgetDescriptorMeta {
-  _meta: ToolDefinitionMeta | EmptyToolDefinitionMeta;
-}
-
-function shouldAttachWidget(mode: WidgetMode, kind: ToolWidgetKind): boolean {
-  switch (mode) {
-    case "off":
-      return false;
-    case "changes":
-      return kind === "workspace" || kind === "show_changes";
-    case "full":
-      return true;
-  }
-}
-
-function toolWidgetDescriptorMeta(
-  config: ServerConfig,
-  kind: ToolWidgetKind,
-): ToolWidgetDescriptorMeta {
-  if (!shouldAttachWidget(config.widgets, kind)) return { _meta: {} };
-
-  return {
-    _meta: {
-      ui: {
-        resourceUri: WORKSPACE_APP_URI,
-        visibility: ["model"],
-      },
-    },
-  };
-}
-
-const toolNames = {
-  openWorkspace: "open_workspace",
-  read: "read",
-  write: "write",
-  edit: "edit",
-  grep: "grep",
-  glob: "glob",
-  ls: "ls",
-  shell: "bash",
-} as const;
-
-const workspaceIdDescription =
-  "Workspace to use. Reuse the current project's workspaceId.";
-
-interface ToolLogFields {
-  tool: string;
-  workspaceId?: string;
-  path?: string;
-  workingDirectory?: string;
-  command?: string;
-  commandLength?: number;
-  success: boolean;
-  durationMs: number;
-  error?: string;
-}
 
 function serverInstructions(config: ServerConfig): string {
   const artifactInstruction = config.artifactsEnabled && isArtifactDownloadSupportedPlatform()
@@ -251,17 +151,6 @@ function formatAvailableAgentProvider(provider: {
     provider.note,
   ].filter(Boolean).join(", ");
   return `${provider.id}${details ? ` (${details})` : ""}`;
-}
-
-function resultOutputSchema(extra: z.ZodRawShape = {}): z.ZodRawShape {
-  return {
-    result: z
-      .string()
-      .describe(
-        "Model-readable result text for follow-up reasoning and plain MCP hosts.",
-      ),
-    ...extra,
-  };
 }
 
 const workspaceSkillOutputSchema = z.object({
@@ -350,49 +239,6 @@ function requestLogFields(req: Request, config: ServerConfig): Record<string, un
   };
 }
 
-function logToolCall(config: ServerConfig, fields: ToolLogFields): void {
-  if (!config.logging.toolCalls) return;
-
-  const { command, ...safeFields } = fields;
-  logEvent(config.logging, fields.success ? "info" : "warn", "tool_call", {
-    ...safeFields,
-    commandPreview: config.logging.shellCommands && command ? commandPreview(command) : undefined,
-  });
-}
-
-function contentText(content: ToolContent[]): string {
-  return content
-    .filter(
-      (item): item is { type: "text"; text: string } => item.type === "text",
-    )
-    .map((item) => item.text)
-    .join("\n");
-}
-
-function toolErrorPreview(content: ToolContent[]): string | undefined {
-  const text = contentText(content).replace(/\s+/g, " ").trim();
-  if (!text) return undefined;
-  return text.length > 240 ? `${text.slice(0, 237)}...` : text;
-}
-
-function logFailedToolResponse(
-  config: ServerConfig,
-  fields: Omit<ToolLogFields, "success" | "durationMs" | "error">,
-  content: ToolContent[],
-  startedAt: number,
-): void {
-  logToolCall(config, {
-    ...fields,
-    success: false,
-    durationMs: Math.round(performance.now() - startedAt),
-    error: toolErrorPreview(content),
-  });
-}
-
-function textBlock(text: string): ToolContent {
-  return { type: "text", text };
-}
-
 function formatLocalAgentRecord(record: LocalAgentRecord): string {
   const target = record.profileName || record.provider;
   const details = [
@@ -416,62 +262,6 @@ function localAgentErrorResponse(error: Parameters<typeof toAgentErrorPayload>[0
     structuredContent: { result },
     isError: true,
   };
-}
-
-function textSummary(content: ToolContent[]): {
-  lines: number;
-  characters: number;
-} {
-  const text = contentText(content);
-  return {
-    lines: text.length === 0 ? 0 : text.split("\n").length,
-    characters: text.length,
-  };
-}
-
-function contentLineCount(content: string): number {
-  if (content.length === 0) return 0;
-  return content.endsWith("\n")
-    ? content.slice(0, -1).split("\n").length
-    : content.split("\n").length;
-}
-
-function countDiffStats(diff: string | undefined): DiffStats {
-  if (!diff) return { additions: 0, removals: 0 };
-
-  let additions = 0;
-  let removals = 0;
-
-  for (const line of diff.split("\n")) {
-    if (line.startsWith("+") && !line.startsWith("+++")) additions++;
-    if (line.startsWith("-") && !line.startsWith("---")) removals++;
-  }
-
-  return { additions, removals };
-}
-
-function newFilePatch(path: string, content: string): string {
-  const lines =
-    content.length === 0
-      ? []
-      : content.endsWith("\n")
-        ? content.slice(0, -1).split("\n")
-        : content.split("\n");
-  const hunkLength = lines.length;
-  const hunkRange = hunkLength === 0 ? "+0,0" : `+1,${hunkLength}`;
-  const body = lines.map((line) => `+${line}`).join("\n");
-
-  return [
-    `diff --git a/${path} b/${path}`,
-    "new file mode 100644",
-    "index 0000000..0000000",
-    "--- /dev/null",
-    `+++ b/${path}`,
-    `@@ -0,0 ${hunkRange} @@`,
-    body,
-  ]
-    .filter((line) => line.length > 0)
-    .join("\n");
 }
 
 function assetBaseUrl(config: ServerConfig): string {
@@ -1233,345 +1023,7 @@ export function createMcpServer(
 
   moduleRegistry.register({
     id: "filesystem",
-    register: () => {
-  registerAppTool(
-    server,
-    toolNames.read,
-    {
-      title: "Read file",
-      description:
-        [
-          "Read a file in a workspace. Use this for file inspection instead of shell commands like cat or sed.",
-          "Use this tool to inspect relevant AGENTS.md or CLAUDE.md files listed by open_workspace before working in nested directories.",
-          config.skillsEnabled
-            ? "If available skills were returned and a task matches one, read that skill's path before proceeding. Skill paths may be outside the workspace; only advertised SKILL.md files and files under already-loaded skill directories are readable."
-            : "",
-        ]
-          .filter(Boolean)
-          .join(" "),
-      inputSchema: {
-        workspaceId: z
-          .string()
-          .describe(workspaceIdDescription),
-        path: z
-          .string()
-          .describe(
-            config.skillsEnabled
-              ? "File path to read, relative to the workspace root. May also be an advertised skill path from open_workspace skills."
-              : "File path to read, relative to the workspace root.",
-          ),
-        offset: z
-          .number()
-          .int()
-          .positive()
-          .optional()
-          .describe("1-indexed line number to start reading from."),
-        limit: z
-          .number()
-          .int()
-          .positive()
-          .optional()
-          .describe("Maximum number of lines to read."),
-      },
-      outputSchema: resultOutputSchema(),
-      ...toolWidgetDescriptorMeta(config, "read"),
-      annotations: { readOnlyHint: true },
-    },
-    async ({ workspaceId, ...input }) => {
-      const startedAt = performance.now();
-      const workspace = workspaces.getWorkspace(workspaceId);
-      const readPath = workspaces.resolveReadPath(workspace, input.path);
-      const response = await readFileTool(
-        { ...input, path: readPath.absolutePath },
-        {
-          cwd: workspace.root,
-          root: workspace.root,
-          readRoots: readPath.readRoots,
-        },
-      );
-
-      if (response.isError) {
-        logFailedToolResponse(config, {
-          tool: toolNames.read,
-          workspaceId,
-          path: input.path,
-        }, response.content, startedAt);
-        return response;
-      }
-      workspaces.markReadPathLoaded(workspace, readPath);
-
-      const summary = {
-        ...textSummary(response.content),
-        offset: input.offset ?? 1,
-        limited: input.limit !== undefined,
-      };
-      logToolCall(config, {
-        tool: toolNames.read,
-        workspaceId,
-        path: input.path,
-        success: true,
-        durationMs: Math.round(performance.now() - startedAt),
-      });
-
-      return {
-        ...response,
-        _meta: {
-          tool: toolNames.read,
-          card: {
-            workspaceId,
-            path: input.path,
-            summary,
-            payload: { content: response.content },
-          },
-        },
-        structuredContent: {
-          result: contentText(response.content),
-        },
-      };
-    },
-  );
-
-  if (config.toolMode !== "codex") {
-  registerAppTool(
-    server,
-    toolNames.write,
-    {
-      title: "Write file",
-      description:
-        `Create or completely overwrite a file in a workspace. Prefer ${toolNames.edit} for targeted changes to existing files.`,
-      inputSchema: {
-        workspaceId: z
-          .string()
-          .describe(workspaceIdDescription),
-        path: z
-          .string()
-          .describe("File path to write, relative to the workspace root."),
-        content: z.string().describe("Complete new file content."),
-      },
-      outputSchema: resultOutputSchema(),
-      ...toolWidgetDescriptorMeta(config, "write"),
-      annotations: WRITE_TOOL_ANNOTATIONS,
-    },
-    async ({ workspaceId, ...input }) => {
-      const startedAt = performance.now();
-      const workspace = workspaces.getWorkspace(workspaceId);
-      workspaces.resolvePath(workspace, input.path);
-      const response = await writeFileTool(input, {
-        cwd: workspace.root,
-        root: workspace.root,
-      });
-
-      if (response.isError) {
-        logFailedToolResponse(config, {
-          tool: toolNames.write,
-          workspaceId,
-          path: input.path,
-        }, response.content, startedAt);
-        return response;
-      }
-
-      const patch = newFilePatch(input.path, input.content);
-      const stats = countDiffStats(patch);
-      const summary = {
-        ...stats,
-        lines: contentLineCount(input.content),
-        characters: input.content.length,
-      };
-      logToolCall(config, {
-        tool: toolNames.write,
-        workspaceId,
-        path: input.path,
-        success: true,
-        durationMs: Math.round(performance.now() - startedAt),
-      });
-
-      return {
-        ...response,
-        _meta: {
-          tool: toolNames.write,
-          card: {
-            workspaceId,
-            path: input.path,
-            summary,
-            payload: {
-              content: response.content,
-              patch,
-            },
-          },
-        },
-        structuredContent: {
-          result: contentText(response.content),
-        },
-      };
-    },
-  );
-
-  registerAppTool(
-    server,
-    toolNames.edit,
-    {
-      title: "Edit file",
-      description:
-        `Edit one file in a workspace by replacing exact text blocks. Prefer this over ${toolNames.write} for targeted changes. Each oldText must match a unique, non-overlapping region of the original file; merge nearby changes into one edit and keep oldText as small as possible while still unique.`,
-      inputSchema: {
-        workspaceId: z
-          .string()
-          .describe(workspaceIdDescription),
-        path: z
-          .string()
-          .describe("File path to edit, relative to the workspace root."),
-        edits: z
-          .array(
-            z.object({
-              oldText: z
-                .string()
-                .describe(
-                  "Exact text to replace. Must match uniquely in the original file.",
-                ),
-              newText: z.string().describe("Replacement text."),
-            }),
-          )
-          .min(1),
-      },
-      outputSchema: resultOutputSchema({
-        status: z.literal("applied"),
-      }),
-      ...toolWidgetDescriptorMeta(config, "edit"),
-      annotations: EDIT_TOOL_ANNOTATIONS,
-    },
-    async ({ workspaceId, ...input }) => {
-      const startedAt = performance.now();
-      const workspace = workspaces.getWorkspace(workspaceId);
-      workspaces.resolvePath(workspace, input.path);
-      const response = await editFileTool(input, {
-        cwd: workspace.root,
-        root: workspace.root,
-      });
-
-      if (response.isError) {
-        logFailedToolResponse(config, {
-          tool: toolNames.edit,
-          workspaceId,
-          path: input.path,
-        }, response.content, startedAt);
-        return response;
-      }
-
-      const stats = countDiffStats(
-        response.details?.patch ?? response.details?.diff,
-      );
-      const summary = {
-        ...stats,
-        editCount: input.edits.length,
-      };
-      const editResultText = `Edited ${input.path} (+${stats.additions} -${stats.removals}).`;
-      const editContent = [textBlock(editResultText)];
-      logToolCall(config, {
-        tool: toolNames.edit,
-        workspaceId,
-        path: input.path,
-        success: true,
-        durationMs: Math.round(performance.now() - startedAt),
-      });
-
-      return {
-        content: editContent,
-        _meta: {
-          tool: toolNames.edit,
-          card: {
-            workspaceId,
-            path: input.path,
-            summary,
-            payload: {
-              diff: response.details?.diff,
-              patch: response.details?.patch,
-            },
-          },
-        },
-        structuredContent: {
-          status: "applied",
-          result: contentText(editContent),
-        },
-      };
-    },
-  );
-  }
-
-  if (config.toolMode === "codex") {
-    registerAppTool(
-      server,
-      "apply_patch",
-      {
-        title: "Apply patch",
-        description:
-          "Apply one Codex-style patch in a workspace. Supports adding, overwriting, updating, deleting, and moving files. Use this for all file modifications. Paths must be relative to the workspace.",
-        inputSchema: {
-          workspaceId: z
-            .string()
-            .describe(workspaceIdDescription),
-          patch: z
-            .string()
-            .describe("Patch text enclosed by *** Begin Patch and *** End Patch markers."),
-        },
-        outputSchema: resultOutputSchema({
-          additions: z.number(),
-          removals: z.number(),
-          files: z.array(
-            z.object({
-              path: z.string(),
-              previousPath: z.string().optional(),
-              operation: z.enum(["add", "update", "delete", "move"]),
-            }),
-          ),
-        }),
-        ...toolWidgetDescriptorMeta(config, "edit"),
-        annotations: EDIT_TOOL_ANNOTATIONS,
-      },
-      async ({ workspaceId, patch }) => {
-        const startedAt = performance.now();
-        const workspace = workspaces.getWorkspace(workspaceId);
-        const applied = await applyPatch(workspace.root, patch);
-        const paths = applied.files.map((file) => file.path).join(", ");
-        const result = `Applied patch to ${applied.files.length} file(s): ${paths}`;
-        const content = [textBlock(result)];
-        const displayPath = applied.files.length === 1
-          ? applied.files[0]?.path
-          : `${applied.files.length} files`;
-
-        logToolCall(config, {
-          tool: "apply_patch",
-          workspaceId,
-          success: true,
-          durationMs: Math.round(performance.now() - startedAt),
-        });
-
-        return {
-          content,
-          _meta: {
-            tool: "apply_patch",
-            card: {
-              workspaceId,
-              path: displayPath,
-              summary: {
-                files: applied.files.length,
-                additions: applied.additions,
-                removals: applied.removals,
-              },
-              files: applied.files,
-              payload: { patch: applied.patch },
-            },
-          },
-          structuredContent: {
-            result,
-            additions: applied.additions,
-            removals: applied.removals,
-            files: applied.files,
-          },
-        };
-      },
-    );
-  }
-    },
+    register: () => registerFilesystemTools(server, config, workspaces),
   }, moduleContext);
 
   moduleRegistry.register({
@@ -1636,216 +1088,7 @@ export function createMcpServer(
   moduleRegistry.register({
     id: "filesystem-search",
     enabled: () => config.toolMode === "full",
-    register: () => {
-    registerAppTool(
-      server,
-      toolNames.grep,
-      {
-        title: "Grep",
-        description:
-          "Search file contents in a workspace. Use this before broad reads when looking for symbols, text, or usage sites. Respects project ignore rules.",
-        inputSchema: {
-          workspaceId: z
-            .string()
-            .describe(workspaceIdDescription),
-          pattern: z.string().describe("Search pattern."),
-          path: z
-            .string()
-            .optional()
-            .describe(
-              "Optional path or glob scope relative to the workspace root.",
-            ),
-          include: z.string().optional().describe("Optional include glob."),
-        },
-        outputSchema: resultOutputSchema(),
-        ...toolWidgetDescriptorMeta(config, "search"),
-        annotations: { readOnlyHint: true },
-      },
-      async ({ workspaceId, ...input }) => {
-        const startedAt = performance.now();
-        const workspace = workspaces.getWorkspace(workspaceId);
-        if (input.path) workspaces.resolvePath(workspace, input.path);
-        const response = await grepFilesTool(input, {
-          cwd: workspace.root,
-          root: workspace.root,
-        });
-
-        if (response.isError) {
-          logFailedToolResponse(config, {
-            tool: toolNames.grep,
-            workspaceId,
-            path: input.path,
-          }, response.content, startedAt);
-          return response;
-        }
-
-        const summary = {
-          pattern: input.pattern,
-          scope: input.path ?? ".",
-          ...textSummary(response.content),
-        };
-        logToolCall(config, {
-          tool: toolNames.grep,
-          workspaceId,
-          path: input.path,
-          success: true,
-          durationMs: Math.round(performance.now() - startedAt),
-        });
-
-        return {
-          ...response,
-          _meta: {
-            tool: toolNames.grep,
-            card: {
-              workspaceId,
-              path: input.path,
-              summary,
-              payload: { content: response.content },
-            },
-          },
-          structuredContent: {
-            result: contentText(response.content),
-          },
-        };
-      },
-    );
-
-    registerAppTool(
-      server,
-      toolNames.glob,
-      {
-        title: "Glob",
-        description:
-          "Find files by glob pattern in a workspace. Use this to discover filenames or narrow file sets before reading. Respects project ignore rules.",
-        inputSchema: {
-          workspaceId: z
-            .string()
-            .describe(workspaceIdDescription),
-          pattern: z.string().describe("File glob pattern."),
-          path: z
-            .string()
-            .optional()
-            .describe("Optional path scope relative to the workspace root."),
-        },
-        outputSchema: resultOutputSchema(),
-        ...toolWidgetDescriptorMeta(config, "search"),
-        annotations: { readOnlyHint: true },
-      },
-      async ({ workspaceId, ...input }) => {
-        const startedAt = performance.now();
-        const workspace = workspaces.getWorkspace(workspaceId);
-        if (input.path) workspaces.resolvePath(workspace, input.path);
-        const response = await findFilesTool(input, {
-          cwd: workspace.root,
-          root: workspace.root,
-        });
-
-        if (response.isError) {
-          logFailedToolResponse(config, {
-            tool: toolNames.glob,
-            workspaceId,
-            path: input.path,
-          }, response.content, startedAt);
-          return response;
-        }
-
-        const summary = {
-          pattern: input.pattern,
-          scope: input.path ?? ".",
-          ...textSummary(response.content),
-        };
-        logToolCall(config, {
-          tool: toolNames.glob,
-          workspaceId,
-          path: input.path,
-          success: true,
-          durationMs: Math.round(performance.now() - startedAt),
-        });
-
-        return {
-          ...response,
-          _meta: {
-            tool: toolNames.glob,
-            card: {
-              workspaceId,
-              path: input.path,
-              summary,
-              payload: { content: response.content },
-            },
-          },
-          structuredContent: {
-            result: contentText(response.content),
-          },
-        };
-      },
-    );
-
-    registerAppTool(
-      server,
-      toolNames.ls,
-      {
-        title: "Ls",
-        description:
-          "List a directory in a workspace. Use this for directory inspection before reading files.",
-        inputSchema: {
-          workspaceId: z
-            .string()
-            .describe(workspaceIdDescription),
-          path: z
-            .string()
-            .describe(
-              "Directory path to list, relative to the workspace root.",
-            ),
-        },
-        outputSchema: resultOutputSchema(),
-        ...toolWidgetDescriptorMeta(config, "directory"),
-        annotations: { readOnlyHint: true },
-      },
-      async ({ workspaceId, ...input }) => {
-        const startedAt = performance.now();
-        const workspace = workspaces.getWorkspace(workspaceId);
-        workspaces.resolvePath(workspace, input.path);
-        const response = await listDirectoryTool(input, {
-          cwd: workspace.root,
-          root: workspace.root,
-        });
-
-        if (response.isError) {
-          logFailedToolResponse(config, {
-            tool: toolNames.ls,
-            workspaceId,
-            path: input.path,
-          }, response.content, startedAt);
-          return response;
-        }
-
-        const summary = textSummary(response.content);
-        logToolCall(config, {
-          tool: toolNames.ls,
-          workspaceId,
-          path: input.path,
-          success: true,
-          durationMs: Math.round(performance.now() - startedAt),
-        });
-
-        return {
-          ...response,
-          _meta: {
-            tool: toolNames.ls,
-            card: {
-              workspaceId,
-              path: input.path,
-              summary,
-              payload: { content: response.content },
-            },
-          },
-          structuredContent: {
-            result: contentText(response.content),
-          },
-        };
-      },
-    );
-    },
+    register: () => registerFilesystemSearchTools(server, config, workspaces),
   }, moduleContext);
 
   moduleRegistry.register({
