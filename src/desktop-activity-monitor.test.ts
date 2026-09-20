@@ -3,6 +3,7 @@ import test from "node:test";
 import { DesktopActivityMonitor } from "./desktop-activity-monitor.js";
 import type {
   DesktopAudioGraph,
+  DesktopDeviceInfo,
   DesktopDisplayInfo,
   DesktopProcessInfo,
   DesktopWindowInfo,
@@ -94,6 +95,41 @@ test("desktop activity monitor records PipeWire stream and route changes", async
     "audio.stream.stopped",
     "audio.route.removed",
   ]);
+});
+
+test("desktop activity monitor records device connection, disconnection, and metadata changes", async () => {
+  let devices: DesktopDeviceInfo[] = [
+    bluetoothDevice("bluetooth:xbox", false),
+    usbDevice("usb:index", "Index HMD"),
+    blockDevice("block:sda", []),
+  ];
+  const monitor = new DesktopActivityMonitor({
+    windows: async () => [],
+    processes: async () => [],
+    displays: async () => [],
+    devices: async () => devices,
+  });
+
+  await monitor.sample();
+  assert.equal(monitor.cursor(), 0, "initial hardware inventory should establish a silent baseline");
+
+  devices = [
+    bluetoothDevice("bluetooth:xbox", true),
+    blockDevice("block:sda", ["/mnt/Development"]),
+    usbDevice("usb:kraken", "Razer Kraken V3"),
+  ];
+  await monitor.sample();
+
+  assert.deepEqual(monitor.recent().map((event) => event.type), [
+    "device.connected",
+    "device.changed",
+    "device.connected",
+    "device.disconnected",
+  ]);
+  assert.equal(monitor.recent()[0]?.correlationId, "device:bluetooth:xbox");
+  assert.match(monitor.recent()[1]?.summary ?? "", /mountpoints/);
+  assert.equal(monitor.recent()[2]?.correlationId, "device:usb:kraken");
+  assert.equal(monitor.recent()[3]?.correlationId, "device:usb:index");
 });
 
 function windowInfo(id: string, pid: number, title: string, x: number): DesktopWindowInfo {
@@ -242,5 +278,53 @@ function audioLink(
     inputNodeName,
     outputPortName: "out_FL",
     inputPortName: "in_FL",
+  };
+}
+
+function bluetoothDevice(id: string, connected: boolean): DesktopDeviceInfo {
+  return {
+    id,
+    subsystem: "bluetooth",
+    category: "bluetooth-device",
+    name: "Xbox Wireless Controller",
+    transport: "bluetooth",
+    connected,
+    hotplug: true,
+    removable: true,
+    paired: true,
+    mountpoints: [],
+  };
+}
+
+function usbDevice(id: string, name: string): DesktopDeviceInfo {
+  return {
+    id,
+    subsystem: "usb",
+    category: "usb-device",
+    name,
+    vendor: name === "Index HMD" ? "Valve" : "Razer",
+    transport: "usb",
+    connected: true,
+    hotplug: true,
+    removable: true,
+    mountpoints: [],
+  };
+}
+
+function blockDevice(id: string, mountpoints: string[]): DesktopDeviceInfo {
+  return {
+    id,
+    subsystem: "block",
+    category: "disk",
+    name: "TEAM T2532TB",
+    vendor: "ATA",
+    model: "TEAM T2532TB",
+    path: "/dev/sda",
+    transport: "sata",
+    connected: true,
+    hotplug: false,
+    removable: false,
+    sizeBytes: 2048408248320,
+    mountpoints,
   };
 }

@@ -200,7 +200,7 @@ test("desktop agent decodes a structured process list", () => {
 
 test("desktop agent decodes a recent activity timeline", () => {
   const timeline = decodeDesktopActivityTimeline({
-    cursor: 13,
+    cursor: 14,
     events: [{
       sequence: 12,
       timestamp: "2026-09-20T01:00:00.000Z",
@@ -222,13 +222,24 @@ test("desktop agent decodes a recent activity timeline", () => {
       applicationId: "Discord",
       pid: 1800836,
       summary: "Audio route created: Shiryu Microphone 1 → WEBRTC VoiceEngine.",
+    }, {
+      sequence: 14,
+      timestamp: "2026-09-20T01:00:02.000Z",
+      type: "device.connected",
+      sourceModule: "devices",
+      entityId: "usb:3-2.3.1",
+      correlationId: "device:usb:3-2.3.1",
+      applicationId: "usb:usb-device",
+      summary: "Device connected: Index HMD [usb].",
     }],
   });
-  assert.equal(timeline.cursor, 13);
+  assert.equal(timeline.cursor, 14);
   assert.equal(timeline.events[0]?.type, "window.created");
   assert.equal(timeline.events[0]?.correlationId, "pid:2501");
   assert.equal(timeline.events[1]?.type, "audio.route.created");
   assert.equal(timeline.events[1]?.sourceModule, "audio");
+  assert.equal(timeline.events[2]?.type, "device.connected");
+  assert.equal(timeline.events[2]?.sourceModule, "devices");
 });
 
 test("desktop agent decodes a structured PipeWire audio graph", () => {

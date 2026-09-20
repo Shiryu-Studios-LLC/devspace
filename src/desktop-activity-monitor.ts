@@ -3,6 +3,7 @@ import type {
   DesktopAudioGraph,
   DesktopAudioLink,
   DesktopAudioNode,
+  DesktopDeviceInfo,
   DesktopDisplayInfo,
   DesktopProcessInfo,
   DesktopWindowInfo,
@@ -13,6 +14,7 @@ export interface DesktopActivityMonitorOptions {
   displays: () => Promise<DesktopDisplayInfo[]>;
   processes: () => Promise<DesktopProcessInfo[]>;
   audio?: () => Promise<DesktopAudioGraph>;
+  devices?: () => Promise<DesktopDeviceInfo[]>;
   pollIntervalMs?: number;
   maxEvents?: number;
   now?: () => number;
@@ -26,6 +28,7 @@ export class DesktopActivityMonitor {
   private readonly displaysProvider: () => Promise<DesktopDisplayInfo[]>;
   private readonly processesProvider: () => Promise<DesktopProcessInfo[]>;
   private readonly audioProvider?: () => Promise<DesktopAudioGraph>;
+  private readonly devicesProvider?: () => Promise<DesktopDeviceInfo[]>;
   private readonly pollIntervalMs: number;
   private readonly maxEvents: number;
   private readonly now: () => number;
@@ -36,6 +39,7 @@ export class DesktopActivityMonitor {
   private audioNodes = new Map<number, DesktopAudioNode>();
   private audioStreams = new Map<number, DesktopAudioNode>();
   private audioLinks = new Map<number, DesktopAudioLink>();
+  private devices = new Map<string, DesktopDeviceInfo>();
   private initialized = false;
   private polling = false;
   private sequence = 0;
@@ -46,6 +50,7 @@ export class DesktopActivityMonitor {
     this.displaysProvider = options.displays;
     this.processesProvider = options.processes;
     this.audioProvider = options.audio;
+    this.devicesProvider = options.devices;
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
     this.maxEvents = options.maxEvents ?? DEFAULT_MAX_EVENTS;
     this.now = options.now ?? Date.now;
@@ -89,10 +94,11 @@ export class DesktopActivityMonitor {
       // such as busctl, kscreen-doctor, or pw-dump. Finish those observations
       // before sampling /proc so the activity monitor does not report its own
       // probes as user process start/stop events.
-      const [windowsResult, displaysResult, audioResult] = await Promise.allSettled([
+      const [windowsResult, displaysResult, audioResult, devicesResult] = await Promise.allSettled([
         this.windowsProvider(),
         this.displaysProvider(),
         this.audioProvider ? this.audioProvider() : Promise.resolve(undefined),
+        this.devicesProvider ? this.devicesProvider() : Promise.resolve(undefined),
       ]);
       const processesResult = await Promise.resolve(this.processesProvider()).then(
         (value) => ({ status: "fulfilled" as const, value }),
@@ -118,6 +124,10 @@ export class DesktopActivityMonitor {
       const nextAudioLinks = audioGraph
         ? new Map(audioGraph.links.map((link) => [link.id, link]))
         : this.audioLinks;
+      const deviceList = devicesResult.status === "fulfilled" ? devicesResult.value : undefined;
+      const nextDevices = deviceList
+        ? new Map(deviceList.map((device) => [device.id, device]))
+        : this.devices;
 
       if (!this.initialized) {
         this.windows = nextWindows;
@@ -126,6 +136,7 @@ export class DesktopActivityMonitor {
         this.audioNodes = nextAudioNodes;
         this.audioStreams = nextAudioStreams;
         this.audioLinks = nextAudioLinks;
+        this.devices = nextDevices;
         this.initialized = true;
         return;
       }
@@ -137,6 +148,7 @@ export class DesktopActivityMonitor {
         this.diffAudioStreams(this.audioStreams, nextAudioStreams);
         this.diffAudioLinks(this.audioLinks, nextAudioLinks, this.audioNodes, nextAudioNodes);
       }
+      if (deviceList) this.diffDevices(this.devices, nextDevices);
 
       this.windows = nextWindows;
       this.displays = nextDisplays;
@@ -144,6 +156,7 @@ export class DesktopActivityMonitor {
       this.audioNodes = nextAudioNodes;
       this.audioStreams = nextAudioStreams;
       this.audioLinks = nextAudioLinks;
+      this.devices = nextDevices;
     } finally {
       this.polling = false;
     }
@@ -355,6 +368,38 @@ export class DesktopActivityMonitor {
     }
   }
 
+  private diffDevices(
+    previous: Map<string, DesktopDeviceInfo>,
+    next: Map<string, DesktopDeviceInfo>,
+  ): void {
+    for (const [id, device] of next) {
+      const old = previous.get(id);
+      if (!old) {
+        this.push(deviceEvent("device.connected", device, `Device appeared: ${deviceLabel(device)}.`));
+        continue;
+      }
+      if (!old.connected && device.connected) {
+        this.push(deviceEvent("device.connected", device, `Device connected: ${deviceLabel(device)}.`));
+        continue;
+      }
+      if (old.connected && !device.connected) {
+        this.push(deviceEvent("device.disconnected", device, `Device disconnected: ${deviceLabel(device)}.`));
+        continue;
+      }
+      const changed = changedDeviceFields(old, device);
+      if (changed.length === 0) continue;
+      this.push(deviceEvent(
+        "device.changed",
+        device,
+        `Device changed: ${deviceLabel(device)}; ${changed.join(", ")}.`,
+      ));
+    }
+    for (const [id, device] of previous) {
+      if (next.has(id)) continue;
+      this.push(deviceEvent("device.disconnected", device, `Device disappeared: ${deviceLabel(device)}.`));
+    }
+  }
+
   private push(event: Omit<DesktopActivityEvent, "sequence" | "timestamp">): void {
     this.sequence += 1;
     this.events.push({
@@ -430,6 +475,39 @@ function changedAudioLinkFields(previous: DesktopAudioLink, next: DesktopAudioLi
     changed.push("route identity");
   }
   return changed;
+}
+
+function changedDeviceFields(previous: DesktopDeviceInfo, next: DesktopDeviceInfo): string[] {
+  const changed: string[] = [];
+  if (previous.driver !== next.driver) changed.push("driver");
+  if (previous.transport !== next.transport) changed.push("transport");
+  if (previous.speed !== next.speed) changed.push("speed");
+  if (previous.paired !== next.paired) changed.push(next.paired ? "paired" : "unpaired");
+  if (previous.removable !== next.removable) changed.push("removable state");
+  if (previous.hotplug !== next.hotplug) changed.push("hotplug state");
+  if (previous.sizeBytes !== next.sizeBytes) changed.push("size");
+  if (previous.mountpoints.join("\0") !== next.mountpoints.join("\0")) changed.push("mountpoints");
+  if (previous.name !== next.name || previous.vendor !== next.vendor || previous.model !== next.model) changed.push("identity metadata");
+  return changed;
+}
+
+function deviceEvent(
+  type: "device.connected" | "device.disconnected" | "device.changed",
+  device: DesktopDeviceInfo,
+  summary: string,
+): Omit<DesktopActivityEvent, "sequence" | "timestamp"> {
+  return {
+    type,
+    sourceModule: "devices",
+    entityId: device.id,
+    correlationId: `device:${device.id}`,
+    applicationId: `${device.subsystem}:${device.category}`,
+    summary,
+  };
+}
+
+function deviceLabel(device: DesktopDeviceInfo): string {
+  return `${device.name} [${device.subsystem}]`;
 }
 
 function audioNodeApplicationId(node: DesktopAudioNode): string {

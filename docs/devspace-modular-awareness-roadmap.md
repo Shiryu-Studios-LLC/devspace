@@ -64,7 +64,7 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [x] Read-only PipeWire audio graph, application streams, channel ports, and active route links.
 - [ ] PipeWire live meters and richer runtime stream telemetry.
 - [x] Read-only Linux USB, PCI/PCIe, block-storage, and Bluetooth inventory with privacy-safe identifiers.
-- [ ] Hardware/device hotplug and state-change events.
+- [x] Hardware/device connect/disconnect/state-change events in the bounded activity timeline.
 - [ ] Network interface/route/service awareness.
 - [ ] Authorized filesystem watchers.
 - [ ] Application log/tracing correlation.
@@ -76,7 +76,7 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [x] Add process start/stop events.
 - [ ] Add window focus events. Window create/close/move/resize/title/state changes are already captured by the polling timeline.
 - [x] Add PipeWire audio stream start/stop/change and route create/remove/topology-change events, while suppressing noisy link transport-state flaps.
-- [ ] Add device connect/disconnect/change events.
+- [x] Add device connect/disconnect/change events with privacy-safe stable IDs.
 - [ ] Add notification events.
 - [ ] Add authorized filesystem events.
 - [ ] Add network events. Display connect/disconnect/layout/mode/brightness changes are already captured.

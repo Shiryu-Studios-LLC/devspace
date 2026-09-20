@@ -97,6 +97,7 @@ export class DesktopAgentDaemon {
       displays: this.displaysProvider,
       processes: options.processes ?? (() => listLinuxProcesses([])),
       audio: options.audioGraph ?? (pipeWireAudioAwarenessAvailable() ? this.audioGraphProvider : undefined),
+      devices: options.devices ?? (linuxDeviceAwarenessAvailable() ? this.devicesProvider : undefined),
       now: options.now,
     });
     this.now = options.now ?? Date.now;
@@ -368,7 +369,7 @@ export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
   const processesReady = linuxProcessAwarenessAvailable();
   const audioReady = pipeWireAudioAwarenessAvailable();
   const devicesReady = linuxDeviceAwarenessAvailable();
-  const eventsReady = windowsReady || displaysReady || processesReady || audioReady;
+  const eventsReady = windowsReady || displaysReady || processesReady || audioReady || devicesReady;
   return [
     windowsReady
       ? { id: "windows", state: "ready", detail: "KDE/KWin D-Bus window inventory" }
@@ -392,7 +393,7 @@ export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
       : { id: "devices", state: "unavailable", detail: "Linux hardware inventory sources are unavailable" },
     { id: "network", state: "not_implemented" },
     eventsReady
-      ? { id: "events", state: "ready", detail: "Bounded in-memory process/window/display/audio activity timeline" }
+      ? { id: "events", state: "ready", detail: "Bounded in-memory process/window/display/audio/device activity timeline" }
       : { id: "events", state: "unavailable", detail: "No activity sources are available" },
   ];
 }
