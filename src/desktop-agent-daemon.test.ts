@@ -199,6 +199,43 @@ test("desktop agent hot-applies permission changes without restarting", async (t
   assert.equal((await client.status())?.pid, started.pid);
 });
 
+test("desktop agent starts and stops AT-SPI focus monitoring with permissions", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-focus-monitor-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  let starts = 0;
+  let stops = 0;
+  const activityMonitor = new DesktopActivityMonitor({
+    windows: async () => [],
+    processes: async () => [],
+    displays: async () => [],
+    pollIntervalMs: 60_000,
+  });
+  const daemon = new DesktopAgentDaemon({
+    stateDir,
+    capabilities: () => [
+      { id: "events", state: "ready" },
+      { id: "accessibility", state: "ready" },
+    ],
+    activityMonitor,
+    focusMonitor: {
+      start: () => { starts += 1; },
+      stop: () => { stops += 1; },
+    },
+  });
+  await daemon.start();
+  assert.equal(starts, 1);
+
+  const denied = defaultDesktopPermissionPolicy();
+  denied.accessibility = false;
+  daemon.updatePermissions(denied);
+  assert.equal(stops, 1);
+
+  daemon.updatePermissions(defaultDesktopPermissionPolicy());
+  assert.equal(starts, 2);
+  await daemon.close();
+  assert.equal(stops, 2);
+});
+
 test("desktop agent serves structured screen captures through the screen permission", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-screen-"));
   t.after(() => rm(stateDir, { recursive: true, force: true }));

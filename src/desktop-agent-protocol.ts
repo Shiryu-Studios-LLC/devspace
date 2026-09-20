@@ -248,6 +248,7 @@ export type DesktopActivityEventType =
   | "window.created"
   | "window.closed"
   | "window.changed"
+  | "window.focused"
   | "display.connected"
   | "display.disconnected"
   | "display.changed"
@@ -278,7 +279,7 @@ export interface DesktopActivityEvent {
   sequence: number;
   timestamp: string;
   type: DesktopActivityEventType;
-  sourceModule: "processes" | "windows" | "displays" | "audio" | "devices" | "network" | "notifications" | "virtual-desktops";
+  sourceModule: "processes" | "windows" | "accessibility" | "displays" | "audio" | "devices" | "network" | "notifications" | "virtual-desktops";
   entityId: string;
   correlationId: string;
   applicationId?: string;
@@ -1435,7 +1436,7 @@ function decodeDesktopActivityEvent(value: unknown): DesktopActivityEvent {
     throw new DesktopAgentProtocolError("INVALID_EVENTS", `Invalid desktop activity event type: ${type}`);
   }
   const sourceModule = requiredString(record.sourceModule, "event.sourceModule");
-  if (sourceModule !== "processes" && sourceModule !== "windows" && sourceModule !== "displays" && sourceModule !== "audio" && sourceModule !== "devices" && sourceModule !== "network" && sourceModule !== "notifications" && sourceModule !== "virtual-desktops") {
+  if (sourceModule !== "processes" && sourceModule !== "windows" && sourceModule !== "accessibility" && sourceModule !== "displays" && sourceModule !== "audio" && sourceModule !== "devices" && sourceModule !== "network" && sourceModule !== "notifications" && sourceModule !== "virtual-desktops") {
     throw new DesktopAgentProtocolError("INVALID_EVENTS", `Invalid desktop activity source: ${sourceModule}`);
   }
   return {
@@ -1769,6 +1770,7 @@ function isDesktopActivityEventType(value: string): value is DesktopActivityEven
     || value === "window.created"
     || value === "window.closed"
     || value === "window.changed"
+    || value === "window.focused"
     || value === "display.connected"
     || value === "display.disconnected"
     || value === "display.changed"

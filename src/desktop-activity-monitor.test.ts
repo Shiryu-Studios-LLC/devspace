@@ -54,6 +54,45 @@ test("desktop activity monitor establishes a silent baseline and records bounded
   assert.equal(events[3]?.timestamp, "2026-09-20T01:00:01.000Z");
 });
 
+test("desktop activity monitor records deduplicated AT-SPI window focus changes", () => {
+  const monitor = new DesktopActivityMonitor({
+    windows: async () => [],
+    processes: async () => [],
+    displays: async () => [],
+  });
+  monitor.recordWindowFocus({
+    processId: 123,
+    application: "Example",
+    applicationId: "org.example.App",
+    windowRole: "dialog",
+    windowName: "Settings",
+    windowAccessibleId: "settings-dialog",
+    controlRole: "button",
+  });
+  monitor.recordWindowFocus({
+    processId: 123,
+    application: "Example",
+    applicationId: "org.example.App",
+    windowRole: "dialog",
+    windowName: "Settings",
+    windowAccessibleId: "settings-dialog",
+    controlRole: "entry",
+  });
+  monitor.recordWindowFocus({
+    processId: 123,
+    application: "Example",
+    applicationId: "org.example.App",
+    windowRole: "dialog",
+    windowName: "Confirm",
+    windowAccessibleId: "confirm-dialog",
+    controlRole: "button",
+  });
+  assert.deepEqual(monitor.recent().map((event) => event.type), ["window.focused", "window.focused"]);
+  assert.equal(monitor.recent()[0]?.sourceModule, "accessibility");
+  assert.equal(monitor.recent()[0]?.correlationId, "pid:123");
+  assert.equal(monitor.recent()[1]?.title, "Confirm");
+});
+
 test("desktop activity monitor records PipeWire stream and route changes", async () => {
   let audio = audioGraph(
     [

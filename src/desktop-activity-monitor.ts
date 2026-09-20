@@ -53,6 +53,7 @@ export class DesktopActivityMonitor {
   private notifications = new Map<string, DesktopNotificationInfo>();
   private virtualDesktops?: DesktopVirtualDesktopSnapshot;
   private initialized = false;
+  private lastFocusedWindowKey?: string;
   private polling = false;
   private sequence = 0;
   private timer?: NodeJS.Timeout;
@@ -99,6 +100,33 @@ export class DesktopActivityMonitor {
   recent(limit = 200): DesktopActivityEvent[] {
     const safeLimit = Number.isSafeInteger(limit) ? Math.max(1, Math.min(limit, this.maxEvents)) : 200;
     return this.events.slice(-safeLimit);
+  }
+
+  recordWindowFocus(event: {
+    processId: number;
+    application: string;
+    applicationId: string;
+    windowRole: string;
+    windowName: string;
+    windowAccessibleId: string;
+    controlRole: string;
+  }): void {
+    if (!Number.isSafeInteger(event.processId) || event.processId <= 0) return;
+    const windowIdentity = event.windowAccessibleId || `${event.windowRole}:${event.windowName}`;
+    const key = `${event.processId}:${windowIdentity}`;
+    if (key === this.lastFocusedWindowKey) return;
+    this.lastFocusedWindowKey = key;
+    const title = event.windowName || event.application || event.applicationId || `pid ${event.processId}`;
+    this.push({
+      type: "window.focused",
+      sourceModule: "accessibility",
+      entityId: key,
+      correlationId: `pid:${event.processId}`,
+      applicationId: event.applicationId || event.application || undefined,
+      pid: event.processId,
+      title: event.windowName || undefined,
+      summary: `Window focused: ${title}${event.controlRole ? `; focused control role ${event.controlRole}` : ""}.`,
+    });
   }
 
   async sample(): Promise<void> {

@@ -80,7 +80,7 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 
 - [x] Add a common event envelope with sequence, timestamp, source module, application identity, entity ID, and correlation ID.
 - [x] Add process start/stop events.
-- [ ] Add window focus events through a verified Wayland-native/AT-SPI signal path. Window create/close/move/resize/title/state changes are already captured by the polling timeline.
+- [x] Add signal-driven window focus events through verified Wayland-native AT-SPI `object:state-changed:focused` listeners, collapsed to nearest dialog/frame/window identity so control-level focus changes do not spam the timeline. Window create/close/move/resize/title/state changes remain captured by the polling timeline.
 - [x] Add virtual desktop create/remove/name/order/current-desktop events.
 - [x] Add PipeWire audio stream start/stop/change and route create/remove/topology-change events, while suppressing noisy link transport-state flaps.
 - [x] Add device connect/disconnect/change events with privacy-safe stable IDs.

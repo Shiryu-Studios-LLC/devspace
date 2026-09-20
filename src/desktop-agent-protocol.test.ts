@@ -546,7 +546,7 @@ test("desktop agent decodes a structured process list", () => {
 
 test("desktop agent decodes a recent activity timeline", () => {
   const timeline = decodeDesktopActivityTimeline({
-    cursor: 14,
+    cursor: 15,
     events: [{
       sequence: 12,
       timestamp: "2026-09-20T01:00:00.000Z",
@@ -577,15 +577,28 @@ test("desktop agent decodes a recent activity timeline", () => {
       correlationId: "device:usb:3-2.3.1",
       applicationId: "usb:usb-device",
       summary: "Device connected: Index HMD [usb].",
+    }, {
+      sequence: 15,
+      timestamp: "2026-09-20T01:00:03.000Z",
+      type: "window.focused",
+      sourceModule: "accessibility",
+      entityId: "2501:main-window",
+      correlationId: "pid:2501",
+      applicationId: "chatgpt",
+      pid: 2501,
+      title: "ChatGPT",
+      summary: "Window focused: ChatGPT; focused control role button.",
     }],
   });
-  assert.equal(timeline.cursor, 14);
+  assert.equal(timeline.cursor, 15);
   assert.equal(timeline.events[0]?.type, "window.created");
   assert.equal(timeline.events[0]?.correlationId, "pid:2501");
   assert.equal(timeline.events[1]?.type, "audio.route.created");
   assert.equal(timeline.events[1]?.sourceModule, "audio");
   assert.equal(timeline.events[2]?.type, "device.connected");
   assert.equal(timeline.events[2]?.sourceModule, "devices");
+  assert.equal(timeline.events[3]?.type, "window.focused");
+  assert.equal(timeline.events[3]?.sourceModule, "accessibility");
 });
 
 test("desktop agent decodes a structured PipeWire audio graph", () => {

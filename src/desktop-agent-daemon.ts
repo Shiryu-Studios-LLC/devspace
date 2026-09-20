@@ -105,10 +105,12 @@ import {
   writeWaylandClipboardText,
 } from "./desktop-clipboard-wayland.js";
 import {
+  AtspiFocusMonitor,
   atspiAccessibilityAvailable,
   createAtspiAccessibilityActionProvider,
   createAtspiAccessibilityProvider,
   type DesktopAccessibilitySnapshotOptions,
+  type DesktopFocusMonitor,
 } from "./desktop-accessibility-atspi.js";
 import {
   createYdotoolInputProvider,
@@ -143,6 +145,7 @@ export interface DesktopAgentDaemonOptions {
   notifications?: () => Promise<DesktopNotificationInfo[]>;
   notificationControl?: (request: DesktopNotificationControlRequest) => Promise<DesktopNotificationControlResult>;
   activityMonitor?: DesktopActivityMonitor;
+  focusMonitor?: DesktopFocusMonitor;
   now?: () => number;
   onClosed?: () => void;
 }
@@ -172,6 +175,7 @@ export class DesktopAgentDaemon {
   private readonly notificationsProvider: () => Promise<DesktopNotificationInfo[]>;
   private readonly notificationControlProvider: (request: DesktopNotificationControlRequest) => Promise<DesktopNotificationControlResult>;
   private readonly activityMonitor: DesktopActivityMonitor;
+  private readonly focusMonitor: DesktopFocusMonitor;
   private readonly now: () => number;
   private readonly onClosed?: () => void;
   private readonly sockets = new Set<Socket>();
@@ -230,6 +234,13 @@ export class DesktopAgentDaemon {
         : undefined,
       now: options.now,
     });
+    this.focusMonitor = options.focusMonitor ?? new AtspiFocusMonitor({
+      onFocus: (event) => {
+        if (!desktopPermissionGranted(this.permissionPolicy, "events")
+          || !desktopPermissionGranted(this.permissionPolicy, "accessibility")) return;
+        this.activityMonitor.recordWindowFocus(event);
+      },
+    });
     this.now = options.now ?? Date.now;
     this.onClosed = options.onClosed;
   }
@@ -256,6 +267,7 @@ export class DesktopAgentDaemon {
       if (this.capabilitiesProvider().find((capability) => capability.id === "events")?.state === "ready") {
         this.activityMonitor.start();
       }
+      if (this.focusMonitoringReady()) this.focusMonitor.start();
       writeDesktopAgentLog(this.paths, "info", "desktop_agent_started", {
         pid: process.pid,
         platform: process.platform,
@@ -293,6 +305,17 @@ export class DesktopAgentDaemon {
     const eventsReady = this.capabilitiesProvider().find((capability) => capability.id === "events")?.state === "ready";
     if (eventsReady) this.activityMonitor.start();
     else this.activityMonitor.stop();
+
+    if (this.focusMonitoringReady()) this.focusMonitor.start();
+    else this.focusMonitor.stop();
+  }
+
+  private focusMonitoringReady(): boolean {
+    if (!desktopPermissionGranted(this.permissionPolicy, "events")
+      || !desktopPermissionGranted(this.permissionPolicy, "accessibility")) return false;
+    const capabilities = this.capabilitiesProvider();
+    return capabilities.find((capability) => capability.id === "events")?.state === "ready"
+      && capabilities.find((capability) => capability.id === "accessibility")?.state === "ready";
   }
 
   status(): DesktopAgentStatus {
@@ -315,6 +338,7 @@ export class DesktopAgentDaemon {
     if (!this.server && !this.ownsLock) return;
     this.stopping = true;
     this.activityMonitor.stop();
+    this.focusMonitor.stop();
     this.notificationMonitor?.stop();
     this.closePromise = (async () => {
       for (const socket of this.sockets) socket.destroy();

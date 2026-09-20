@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  AtspiFocusMonitor,
   createAtspiAccessibilityActionProvider,
   createAtspiAccessibilityProvider,
 } from "./desktop-accessibility-atspi.js";
@@ -90,6 +91,37 @@ test("AT-SPI action provider maps guarded semantic action arguments", async () =
     "ok-button",
   ]);
   assert.equal(result.performed, true);
+});
+
+test("AT-SPI focus monitor accepts only valid focus records", () => {
+  const events: unknown[] = [];
+  const monitor = new AtspiFocusMonitor({ onFocus: (event) => events.push(event) });
+  monitor.ingest({
+    focusedAt: "2026-09-20T12:00:00.000Z",
+    processId: 123,
+    application: "Example",
+    applicationId: "org.example.App",
+    windowRole: "dialog",
+    windowName: "Settings",
+    windowAccessibleId: "settings-dialog",
+    controlRole: "button",
+    controlName: "OK",
+    controlAccessibleId: "ok-button",
+  });
+  monitor.ingest({ processId: 0 });
+  assert.equal(events.length, 1);
+  assert.deepEqual(events[0], {
+    focusedAt: "2026-09-20T12:00:00.000Z",
+    processId: 123,
+    application: "Example",
+    applicationId: "org.example.App",
+    windowRole: "dialog",
+    windowName: "Settings",
+    windowAccessibleId: "settings-dialog",
+    controlRole: "button",
+    controlName: "OK",
+    controlAccessibleId: "ok-button",
+  });
 });
 
 test("AT-SPI provider rejects out-of-range traversal bounds before helper execution", async () => {

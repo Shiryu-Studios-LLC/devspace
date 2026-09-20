@@ -13,6 +13,8 @@ from gi.repository import Atspi  # noqa: E402
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
+FOCUS_WINDOW_ROLES = {"dialog", "frame", "window", "alert"}
+
 
 def safe(call, default=None):
     try:
@@ -170,6 +172,63 @@ def resolve_action_target(node_id):
     return target
 
 
+def focus_event_record(source):
+    process_id = int(safe(source.get_process_id, 0) or 0)
+    control_role = str(safe(source.get_role_name, "unknown") or "unknown")
+    control_name = str(safe(source.get_name, "") or "")
+    control_accessible_id = str(safe(source.get_accessible_id, "") or "")
+    application = safe(source.get_application)
+    application_name = str(safe(application.get_name, "") or "") if application is not None else ""
+    application_id = str(safe(application.get_accessible_id, "") or "") if application is not None else ""
+
+    window = None
+    current = source
+    for _ in range(16):
+        if current is None:
+            break
+        role = str(safe(current.get_role_name, "unknown") or "unknown")
+        if role in FOCUS_WINDOW_ROLES:
+            window = current
+            break
+        current = safe(current.get_parent)
+
+    if window is None:
+        window = application or source
+    window_role = str(safe(window.get_role_name, "unknown") or "unknown")
+    window_name = str(safe(window.get_name, "") or "")
+    window_accessible_id = str(safe(window.get_accessible_id, "") or "")
+    return {
+        "focusedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "processId": process_id,
+        "application": application_name,
+        "applicationId": application_id,
+        "windowRole": window_role,
+        "windowName": window_name,
+        "windowAccessibleId": window_accessible_id,
+        "controlRole": control_role,
+        "controlName": control_name,
+        "controlAccessibleId": control_accessible_id,
+    }
+
+
+def focus_monitor():
+    def on_focus(event, _user_data):
+        if int(getattr(event, "detail1", 0) or 0) != 1:
+            return
+        source = getattr(event, "source", None)
+        if source is None:
+            return
+        record = focus_event_record(source)
+        if record["processId"] <= 0:
+            return
+        print(json.dumps(record, separators=(",", ":"), ensure_ascii=False), flush=True)
+
+    listener = Atspi.EventListener.new(on_focus, None)
+    if not listener.register("object:state-changed:focused"):
+        raise RuntimeError("Unable to register AT-SPI focus listener.")
+    Atspi.event_main()
+
+
 def perform_action(args):
     target = resolve_action_target(args.node_id)
     role = str(safe(target.get_role_name, "unknown") or "unknown")
@@ -230,6 +289,7 @@ def main():
     action.add_argument("--expected-role", required=True)
     action.add_argument("--expected-name", required=True)
     action.add_argument("--expected-accessible-id")
+    subparsers.add_parser("focus-monitor")
     args = parser.parse_args()
 
     if args.command == "snapshot":
@@ -246,6 +306,9 @@ def main():
             print(json.dumps({"error": str(error)}, separators=(",", ":")), file=sys.stderr)
             return 3
         print(json.dumps(result, separators=(",", ":"), ensure_ascii=False))
+        return 0
+    if args.command == "focus-monitor":
+        focus_monitor()
         return 0
     return 2
 
