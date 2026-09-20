@@ -17,6 +17,8 @@ import {
   decodeDesktopDeviceList,
   decodeDesktopDisplayList,
   decodeDesktopNetworkSnapshot,
+  decodeDesktopLogReadResult,
+  decodeDesktopLogSources,
   decodeDesktopProcessList,
   decodeDesktopWindowList,
   encodeDesktopAgentRequest,
@@ -30,6 +32,8 @@ import {
   type DesktopDeviceInfo,
   type DesktopDisplayInfo,
   type DesktopNetworkSnapshot,
+  type DesktopLogReadResult,
+  type DesktopLogSource,
   type DesktopProcessInfo,
   type DesktopWindowInfo,
 } from "./desktop-agent-protocol.js";
@@ -131,6 +135,20 @@ export class DesktopAgentClient {
     return decodeDesktopNetworkSnapshot(await this.requestExisting("network.snapshot"));
   }
 
+  async logSources(): Promise<DesktopLogSource[]> {
+    await this.ensureReady();
+    return decodeDesktopLogSources(await this.requestExisting("logs.sources"));
+  }
+
+  async readLogs(sourceId: string, options: { lines?: number; query?: string } = {}): Promise<DesktopLogReadResult> {
+    await this.ensureReady();
+    return decodeDesktopLogReadResult(await this.requestExisting("logs.read", {
+      sourceId,
+      ...(options.lines === undefined ? {} : { lines: options.lines }),
+      ...(options.query === undefined ? {} : { query: options.query }),
+    }));
+  }
+
   async stop(): Promise<DesktopAgentStatus | undefined> {
     const existing = await this.tryHello();
     if (!existing) return undefined;
@@ -202,14 +220,14 @@ export class DesktopAgentClient {
     }
   }
 
-  private async requestExisting(method: DesktopAgentMethod): Promise<unknown> {
+  private async requestExisting(method: DesktopAgentMethod, params: Record<string, unknown> = {}): Promise<unknown> {
     const token = readDesktopAgentSecret(this.paths);
     if (!token) {
       throw new DesktopAgentClientError("DESKTOP_AGENT_UNAVAILABLE", "Desktop agent is not running.", true);
     }
     const response = await sendRequest(
       this.endpoint,
-      request(method, token),
+      request(method, token, params),
       this.requestTimeoutMs,
     );
     if (!response.ok) throw remoteError(response);
@@ -224,14 +242,14 @@ export class DesktopAgentClient {
   }
 }
 
-function request(method: DesktopAgentMethod, authToken: string): DesktopAgentRequest {
+function request(method: DesktopAgentMethod, authToken: string, params: Record<string, unknown> = {}): DesktopAgentRequest {
   return {
     requestId: randomUUID(),
     protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
     authToken,
     method,
-    params: {},
-  };
+    params,
+  } as DesktopAgentRequest;
 }
 
 async function sendRequest(

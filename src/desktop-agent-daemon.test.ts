@@ -430,6 +430,48 @@ test("desktop agent serves a structured read-only network snapshot", async (t) =
   assert.deepEqual(await client.networkSnapshot(), expectedNetwork);
 });
 
+test("desktop agent serves explicit bounded log sources and reads", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-logs-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const expectedSources = [{
+    id: "journal:_COMM:bm9kZQ",
+    kind: "journal" as const,
+    label: "node",
+    selector: "_COMM=node",
+    lastSeen: "2026-09-20T03:00:00.000Z",
+    sampledEntries: 12,
+  }];
+  const expectedLogs = {
+    sourceId: expectedSources[0]!.id,
+    generatedAt: "2026-09-20T03:01:00.000Z",
+    query: "tool_call",
+    entries: [{
+      timestamp: "2026-09-20T03:00:59.000Z",
+      priority: 6,
+      unit: undefined,
+      identifier: undefined,
+      processName: "node",
+      pid: 9460,
+      message: "tool_call desktop_network_snapshot",
+    }],
+  };
+  const daemon = new DesktopAgentDaemon({
+    stateDir,
+    capabilities: () => [{ id: "logs", state: "ready" }],
+    logSources: async () => expectedSources,
+    readLogs: async (sourceId, options) => ({ ...expectedLogs, sourceId, query: options?.query }),
+  });
+  t.after(() => daemon.close());
+  await daemon.start();
+  const client = new DesktopAgentClient({
+    stateDir,
+    spawnDaemon: () => assert.fail("existing daemon should not be respawned"),
+  });
+
+  assert.deepEqual(await client.logSources(), expectedSources);
+  assert.deepEqual(await client.readLogs(expectedSources[0]!.id, { lines: 25, query: "tool_call" }), expectedLogs);
+});
+
 test("desktop agent client can auto-start and stop an isolated daemon", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-autostart-"));
   t.after(() => rm(stateDir, { recursive: true, force: true }));

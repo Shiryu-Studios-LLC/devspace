@@ -12,6 +12,8 @@ import {
   decodeDesktopDeviceList,
   decodeDesktopDisplayList,
   decodeDesktopNetworkSnapshot,
+  decodeDesktopLogReadResult,
+  decodeDesktopLogSources,
   decodeDesktopProcessList,
   decodeDesktopWindowList,
   encodeDesktopAgentRequest,
@@ -94,6 +96,27 @@ test("desktop agent accepts the read-only network snapshot method", () => {
     params: {},
   };
   assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
+});
+
+test("desktop agent accepts log source listing and bounded log reads", () => {
+  const sourcesRequest: DesktopAgentRequest = {
+    requestId: "request-log-sources",
+    protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
+    authToken: "a".repeat(64),
+    method: "logs.sources",
+    params: {},
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(sourcesRequest))), sourcesRequest);
+
+  const readRequest: DesktopAgentRequest = {
+    requestId: "request-log-read",
+    protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
+    authToken: "a".repeat(64),
+    method: "logs.read",
+    params: { sourceId: "journal:_COMM:bm9kZQ", lines: 25, query: "tool_call" },
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(readRequest))), readRequest);
+  assert.throws(() => decodeDesktopAgentRequest({ ...readRequest, params: { ...readRequest.params, path: "/tmp/x" } }), /unknown parameters/);
 });
 
 test("desktop agent accepts the read-only audio graph method", () => {
@@ -362,6 +385,35 @@ test("desktop agent decodes a structured network snapshot", () => {
   assert.equal(network.interfaces[0]?.name, "enp5s0");
   assert.equal(network.listeners[0]?.port, 7676);
   assert.equal(network.cloudflareTunnel.running, true);
+});
+
+test("desktop agent decodes log sources and explicit bounded log reads", () => {
+  const sources = decodeDesktopLogSources([{
+    id: "journal:_SYSTEMD_USER_UNIT:cGxhc21hLXBsYXNtYXNoZWxsLnNlcnZpY2U",
+    kind: "journal",
+    label: "plasma-plasmashell.service",
+    selector: "_SYSTEMD_USER_UNIT=plasma-plasmashell.service",
+    lastSeen: "2026-09-20T03:00:00.000Z",
+    sampledEntries: 42,
+  }]);
+  assert.equal(sources[0]?.label, "plasma-plasmashell.service");
+
+  const logs = decodeDesktopLogReadResult({
+    sourceId: sources[0]?.id,
+    generatedAt: "2026-09-20T03:01:00.000Z",
+    query: "render",
+    entries: [{
+      timestamp: "2026-09-20T03:00:59.000Z",
+      priority: 6,
+      unit: "plasma-plasmashell.service",
+      identifier: "plasmashell",
+      processName: "plasmashell",
+      pid: 2237,
+      message: "render completed",
+    }],
+  });
+  assert.equal(logs.entries[0]?.pid, 2237);
+  assert.equal(logs.entries[0]?.message, "render completed");
 });
 
 test("desktop agent response and status decode capability states", () => {

@@ -14,6 +14,8 @@ import type {
   DesktopDeviceInfo,
   DesktopDisplayInfo,
   DesktopNetworkSnapshot,
+  DesktopLogReadResult,
+  DesktopLogSource,
   DesktopProcessInfo,
   DesktopWindowInfo,
 } from "../desktop-agent-protocol.js";
@@ -536,6 +538,90 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
 
   registerAppTool(
     server,
+    "desktop_log_sources",
+    {
+      title: "Desktop Log Sources",
+      description:
+        "List recent Linux user-journal sources known to the isolated desktop agent without reading their message contents. Sources are represented by opaque IDs for explicit bounded reads.",
+      inputSchema: {},
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        sources: z.array(z.object({
+          id: z.string(),
+          kind: z.literal("journal"),
+          label: z.string(),
+          selector: z.string(),
+          lastSeen: z.string().optional(),
+          sampledEntries: z.number().int().nonnegative(),
+        })).optional(),
+      },
+      _meta: {},
+      annotations: readAnnotations,
+    },
+    async () => {
+      try {
+        const sources = await client.logSources();
+        const result = formatLogSourceSummary(sources);
+        return {
+          content: [{ type: "text" as const, text: result }],
+          structuredContent: { status: "ready" as const, result, sources },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "desktop_read_logs",
+    {
+      title: "Read Desktop Logs",
+      description:
+        "Read a bounded number of messages from one explicit opaque log source returned by desktop_log_sources. Optional query performs case-insensitive message filtering. This cannot read arbitrary filesystem paths.",
+      inputSchema: {
+        sourceId: z.string().min(1),
+        lines: z.number().int().min(1).max(500).optional(),
+        query: z.string().min(1).max(256).optional(),
+      },
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        logs: z.object({
+          sourceId: z.string(),
+          generatedAt: z.string(),
+          query: z.string().optional(),
+          entries: z.array(z.object({
+            timestamp: z.string(),
+            priority: z.number().int().optional(),
+            unit: z.string().optional(),
+            identifier: z.string().optional(),
+            processName: z.string().optional(),
+            pid: z.number().int().optional(),
+            message: z.string(),
+          })),
+        }).optional(),
+      },
+      _meta: {},
+      annotations: readAnnotations,
+    },
+    async ({ sourceId, lines, query }) => {
+      try {
+        const logs = await client.readLogs(sourceId, { lines, query });
+        const result = formatLogReadSummary(logs);
+        return {
+          content: [{ type: "text" as const, text: result }],
+          structuredContent: { status: "ready" as const, result, logs },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
     "desktop_agent_stop",
     {
       title: "Stop Desktop Agent",
@@ -600,6 +686,14 @@ function describeStatus(status: DesktopAgentStatus): string {
     `session ${status.sessionType}`,
     `protocol ${status.protocolVersion}`,
   ].join("; ");
+}
+
+function formatLogReadSummary(logs: DesktopLogReadResult): string {
+  return `Read ${logs.entries.length} log entr${logs.entries.length === 1 ? "y" : "ies"} from ${logs.sourceId}${logs.query ? ` matching ${JSON.stringify(logs.query)}` : ""}.`;
+}
+
+function formatLogSourceSummary(sources: DesktopLogSource[]): string {
+  return `Desktop agent found ${sources.length} recent Linux user-journal source(s) available for explicit bounded reads.`;
 }
 
 function formatNetworkSummary(network: DesktopNetworkSnapshot): string {

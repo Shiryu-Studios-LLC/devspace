@@ -12,6 +12,11 @@ import {
   getLinuxNetworkSnapshot,
   linuxNetworkAwarenessAvailable,
 } from "./desktop-network-linux.js";
+import {
+  linuxLogAwarenessAvailable,
+  listLinuxLogSources,
+  readLinuxLogs,
+} from "./desktop-logs-linux.js";
 import { appendFileSync, chmodSync, rmSync } from "node:fs";
 import { createServer, type Server as NetServer, type Socket } from "node:net";
 import {
@@ -35,6 +40,8 @@ import {
   type DesktopDeviceInfo,
   type DesktopDisplayInfo,
   type DesktopNetworkSnapshot,
+  type DesktopLogReadResult,
+  type DesktopLogSource,
   type DesktopProcessInfo,
   type DesktopWindowInfo,
 } from "./desktop-agent-protocol.js";
@@ -64,6 +71,8 @@ export interface DesktopAgentDaemonOptions {
   audioGraph?: () => Promise<DesktopAudioGraph>;
   devices?: () => Promise<DesktopDeviceInfo[]>;
   networkSnapshot?: () => Promise<DesktopNetworkSnapshot>;
+  logSources?: () => Promise<DesktopLogSource[]>;
+  readLogs?: (sourceId: string, options?: { lines?: number; query?: string }) => Promise<DesktopLogReadResult>;
   activityMonitor?: DesktopActivityMonitor;
   now?: () => number;
   onClosed?: () => void;
@@ -79,6 +88,8 @@ export class DesktopAgentDaemon {
   private readonly audioGraphProvider: () => Promise<DesktopAudioGraph>;
   private readonly devicesProvider: () => Promise<DesktopDeviceInfo[]>;
   private readonly networkSnapshotProvider: () => Promise<DesktopNetworkSnapshot>;
+  private readonly logSourcesProvider: () => Promise<DesktopLogSource[]>;
+  private readonly readLogsProvider: (sourceId: string, options?: { lines?: number; query?: string }) => Promise<DesktopLogReadResult>;
   private readonly activityMonitor: DesktopActivityMonitor;
   private readonly now: () => number;
   private readonly onClosed?: () => void;
@@ -100,6 +111,8 @@ export class DesktopAgentDaemon {
     this.audioGraphProvider = options.audioGraph ?? getPipeWireAudioGraph;
     this.devicesProvider = options.devices ?? listLinuxDevices;
     this.networkSnapshotProvider = options.networkSnapshot ?? getLinuxNetworkSnapshot;
+    this.logSourcesProvider = options.logSources ?? listLinuxLogSources;
+    this.readLogsProvider = options.readLogs ?? readLinuxLogs;
     this.activityMonitor = options.activityMonitor ?? new DesktopActivityMonitor({
       windows: this.windowsProvider,
       displays: this.displaysProvider,
@@ -349,6 +362,29 @@ export class DesktopAgentDaemon {
         }
         return this.networkSnapshotProvider();
       }
+      case "logs.sources": {
+        const logsCapability = this.capabilitiesProvider().find((capability) => capability.id === "logs");
+        if (logsCapability?.state !== "ready") {
+          throw new DesktopAgentProtocolError(
+            "DESKTOP_LOGS_UNAVAILABLE",
+            logsCapability?.detail ?? "Log awareness is unavailable.",
+          );
+        }
+        return this.logSourcesProvider();
+      }
+      case "logs.read": {
+        const logsCapability = this.capabilitiesProvider().find((capability) => capability.id === "logs");
+        if (logsCapability?.state !== "ready") {
+          throw new DesktopAgentProtocolError(
+            "DESKTOP_LOGS_UNAVAILABLE",
+            logsCapability?.detail ?? "Log awareness is unavailable.",
+          );
+        }
+        return this.readLogsProvider(request.params.sourceId, {
+          lines: request.params.lines,
+          query: request.params.query,
+        });
+      }
       case "desktop.stop":
         this.stopping = true;
         return this.status();
@@ -389,6 +425,7 @@ export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
   const audioReady = pipeWireAudioAwarenessAvailable();
   const devicesReady = linuxDeviceAwarenessAvailable();
   const networkReady = linuxNetworkAwarenessAvailable();
+  const logsReady = linuxLogAwarenessAvailable();
   const eventsReady = windowsReady || displaysReady || processesReady || audioReady || devicesReady || networkReady;
   return [
     windowsReady
@@ -414,6 +451,9 @@ export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
     networkReady
       ? { id: "network", state: "ready", detail: "Read-only Linux interfaces, routes, DNS servers, listening sockets, and Cloudflare Tunnel process state" }
       : { id: "network", state: "unavailable", detail: "Linux iproute2 network inventory is unavailable" },
+    logsReady
+      ? { id: "logs", state: "ready", detail: "Explicit-source bounded reads from the Linux user journal; no arbitrary filesystem paths" }
+      : { id: "logs", state: "unavailable", detail: "Linux user journal is unavailable" },
     eventsReady
       ? { id: "events", state: "ready", detail: "Bounded in-memory process/window/display/audio/device/network activity timeline" }
       : { id: "events", state: "unavailable", detail: "No activity sources are available" },

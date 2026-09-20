@@ -283,6 +283,32 @@ export interface DesktopNetworkSnapshot {
   };
 }
 
+export interface DesktopLogSource {
+  id: string;
+  kind: "journal";
+  label: string;
+  selector: string;
+  lastSeen?: string;
+  sampledEntries: number;
+}
+
+export interface DesktopLogEntry {
+  timestamp: string;
+  priority?: number;
+  unit?: string;
+  identifier?: string;
+  processName?: string;
+  pid?: number;
+  message: string;
+}
+
+export interface DesktopLogReadResult {
+  sourceId: string;
+  generatedAt: string;
+  query?: string;
+  entries: DesktopLogEntry[];
+}
+
 export type DesktopAgentMethod =
   | "hello"
   | "desktop.status"
@@ -294,15 +320,32 @@ export type DesktopAgentMethod =
   | "audio.graph"
   | "devices.list"
   | "network.snapshot"
+  | "logs.sources"
+  | "logs.read"
   | "desktop.stop";
 
-export type DesktopAgentRequest = {
+type DesktopAgentRequestBase = {
   requestId: string;
   protocolVersion: number;
   authToken: string;
-  method: DesktopAgentMethod;
-  params: Record<string, never>;
 };
+
+type DesktopAgentNoParamsMethod = Exclude<DesktopAgentMethod, "logs.read">;
+
+export type DesktopAgentRequest = DesktopAgentRequestBase & (
+  | {
+      method: DesktopAgentNoParamsMethod;
+      params: Record<string, never>;
+    }
+  | {
+      method: "logs.read";
+      params: {
+        sourceId: string;
+        lines?: number;
+        query?: string;
+      };
+    }
+);
 
 export type DesktopAgentResponse =
   | {
@@ -347,7 +390,26 @@ export function decodeDesktopAgentRequest(value: unknown): DesktopAgentRequest {
     throw new DesktopAgentProtocolError("UNKNOWN_METHOD", `Unknown desktop agent method: ${method}`);
   }
   const params = asRecord(record?.params);
-  if (!params || Object.keys(params).length !== 0) {
+  if (!params) {
+    throw new DesktopAgentProtocolError("INVALID_PARAMS", `${method} requires an object params field.`);
+  }
+  if (method === "logs.read") {
+    const sourceId = requiredString(params.sourceId, "logs.sourceId");
+    const lines = params.lines === undefined ? undefined : requiredInteger(params.lines, "logs.lines");
+    const query = params.query === undefined ? undefined : requiredString(params.query, "logs.query");
+    const allowed = new Set(["sourceId", "lines", "query"]);
+    if (Object.keys(params).some((key) => !allowed.has(key))) {
+      throw new DesktopAgentProtocolError("INVALID_PARAMS", "logs.read received unknown parameters.");
+    }
+    return {
+      requestId,
+      protocolVersion,
+      authToken,
+      method,
+      params: { sourceId, ...(lines === undefined ? {} : { lines }), ...(query === undefined ? {} : { query }) },
+    };
+  }
+  if (Object.keys(params).length !== 0) {
     throw new DesktopAgentProtocolError("INVALID_PARAMS", `${method} does not accept parameters.`);
   }
   return { requestId, protocolVersion, authToken, method, params: {} };
@@ -470,6 +532,26 @@ export function decodeDesktopNetworkSnapshot(value: unknown): DesktopNetworkSnap
       running: requiredBoolean(tunnel.running, "network.cloudflareTunnel.running"),
       pids: integerArray(tunnel.pids, "network.cloudflareTunnel.pids"),
     },
+  };
+}
+
+export function decodeDesktopLogSources(value: unknown): DesktopLogSource[] {
+  if (!Array.isArray(value)) {
+    throw new DesktopAgentProtocolError("INVALID_LOGS", "Desktop agent returned an invalid log source list.");
+  }
+  return value.map(decodeDesktopLogSource);
+}
+
+export function decodeDesktopLogReadResult(value: unknown): DesktopLogReadResult {
+  const record = asRecord(value);
+  if (!record || !Array.isArray(record.entries)) {
+    throw new DesktopAgentProtocolError("INVALID_LOGS", "Desktop agent returned an invalid log read result.");
+  }
+  return {
+    sourceId: requiredString(record.sourceId, "logs.sourceId"),
+    generatedAt: requiredString(record.generatedAt, "logs.generatedAt"),
+    query: optionalString(record.query),
+    entries: record.entries.map(decodeDesktopLogEntry),
   };
 }
 
@@ -777,6 +859,35 @@ function decodeDesktopNetworkListener(value: unknown): DesktopNetworkListener {
   };
 }
 
+function decodeDesktopLogSource(value: unknown): DesktopLogSource {
+  const record = asRecord(value);
+  if (!record) throw new DesktopAgentProtocolError("INVALID_LOGS", "Desktop log source must be an object.");
+  const kind = requiredString(record.kind, "logs.source.kind");
+  if (kind !== "journal") throw new DesktopAgentProtocolError("INVALID_LOGS", `Invalid log source kind: ${kind}`);
+  return {
+    id: requiredString(record.id, "logs.source.id"),
+    kind,
+    label: requiredString(record.label, "logs.source.label"),
+    selector: requiredString(record.selector, "logs.source.selector"),
+    lastSeen: optionalString(record.lastSeen),
+    sampledEntries: requiredInteger(record.sampledEntries, "logs.source.sampledEntries"),
+  };
+}
+
+function decodeDesktopLogEntry(value: unknown): DesktopLogEntry {
+  const record = asRecord(value);
+  if (!record) throw new DesktopAgentProtocolError("INVALID_LOGS", "Desktop log entry must be an object.");
+  return {
+    timestamp: requiredString(record.timestamp, "logs.entry.timestamp"),
+    priority: optionalInteger(record.priority),
+    unit: optionalString(record.unit),
+    identifier: optionalString(record.identifier),
+    processName: optionalString(record.processName),
+    pid: optionalInteger(record.pid),
+    message: requiredString(record.message, "logs.entry.message"),
+  };
+}
+
 function decodeCapabilityStatus(value: unknown): DesktopCapabilityStatus {
   const record = asRecord(value);
   const state = requiredString(record?.state, "capability.state");
@@ -801,6 +912,8 @@ function isDesktopAgentMethod(value: string): value is DesktopAgentMethod {
     || value === "audio.graph"
     || value === "devices.list"
     || value === "network.snapshot"
+    || value === "logs.sources"
+    || value === "logs.read"
     || value === "desktop.stop";
 }
 
