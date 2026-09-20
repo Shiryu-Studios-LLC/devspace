@@ -12,6 +12,7 @@ import {
 import {
   decodeDesktopAgentResponse,
   decodeDesktopAgentStatus,
+  decodeDesktopDisplayList,
   decodeDesktopWindowList,
   encodeDesktopAgentRequest,
   type DesktopAgentMethod,
@@ -19,6 +20,7 @@ import {
   type DesktopAgentResponse,
   type DesktopAgentStatus,
   type DesktopCapabilityStatus,
+  type DesktopDisplayInfo,
   type DesktopWindowInfo,
 } from "./desktop-agent-protocol.js";
 
@@ -87,6 +89,11 @@ export class DesktopAgentClient {
   async windows(): Promise<DesktopWindowInfo[]> {
     await this.ensureReady();
     return decodeDesktopWindowList(await this.requestExisting("windows.list"));
+  }
+
+  async displays(): Promise<DesktopDisplayInfo[]> {
+    await this.ensureReady();
+    return decodeDesktopDisplayList(await this.requestExisting("displays.list"));
   }
 
   async stop(): Promise<DesktopAgentStatus | undefined> {

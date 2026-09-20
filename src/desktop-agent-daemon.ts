@@ -18,12 +18,17 @@ import {
   type DesktopAgentRequest,
   type DesktopAgentStatus,
   type DesktopCapabilityStatus,
+  type DesktopDisplayInfo,
   type DesktopWindowInfo,
 } from "./desktop-agent-protocol.js";
 import {
   kdeWindowAwarenessAvailable,
   listKdeWindows,
 } from "./desktop-windows-kde.js";
+import {
+  kdeDisplayAwarenessAvailable,
+  listKdeDisplays,
+} from "./desktop-displays-kde.js";
 
 const MAX_REQUEST_BYTES = 128 * 1024;
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -33,6 +38,7 @@ export interface DesktopAgentDaemonOptions {
   paths?: DesktopAgentPaths;
   capabilities?: () => DesktopCapabilityStatus[];
   windows?: () => Promise<DesktopWindowInfo[]>;
+  displays?: () => Promise<DesktopDisplayInfo[]>;
   now?: () => number;
   onClosed?: () => void;
 }
@@ -42,6 +48,7 @@ export class DesktopAgentDaemon {
   private readonly lock: DesktopAgentLock;
   private readonly capabilitiesProvider: () => DesktopCapabilityStatus[];
   private readonly windowsProvider: () => Promise<DesktopWindowInfo[]>;
+  private readonly displaysProvider: () => Promise<DesktopDisplayInfo[]>;
   private readonly now: () => number;
   private readonly onClosed?: () => void;
   private readonly sockets = new Set<Socket>();
@@ -57,6 +64,7 @@ export class DesktopAgentDaemon {
     this.lock = new DesktopAgentLock(this.paths);
     this.capabilitiesProvider = options.capabilities ?? defaultDesktopCapabilities;
     this.windowsProvider = options.windows ?? listKdeWindows;
+    this.displaysProvider = options.displays ?? listKdeDisplays;
     this.now = options.now ?? Date.now;
     this.onClosed = options.onClosed;
   }
@@ -230,6 +238,16 @@ export class DesktopAgentDaemon {
         }
         return this.windowsProvider();
       }
+      case "displays.list": {
+        const displaysCapability = this.capabilitiesProvider().find((capability) => capability.id === "displays");
+        if (displaysCapability?.state !== "ready") {
+          throw new DesktopAgentProtocolError(
+            "DESKTOP_DISPLAYS_UNAVAILABLE",
+            displaysCapability?.detail ?? "Display awareness is unavailable.",
+          );
+        }
+        return this.displaysProvider();
+      }
       case "desktop.stop":
         this.stopping = true;
         return this.status();
@@ -265,10 +283,14 @@ export class DesktopAgentDaemon {
 
 export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
   const windowsReady = kdeWindowAwarenessAvailable();
+  const displaysReady = kdeDisplayAwarenessAvailable();
   return [
     windowsReady
       ? { id: "windows", state: "ready", detail: "KDE/KWin D-Bus window inventory" }
       : { id: "windows", state: "unavailable", detail: "KDE/KWin graphical session is unavailable" },
+    displaysReady
+      ? { id: "displays", state: "ready", detail: "KDE KScreen display inventory" }
+      : { id: "displays", state: "unavailable", detail: "KDE KScreen graphical session is unavailable" },
     { id: "screen", state: "not_implemented" },
     { id: "input", state: "not_implemented" },
     { id: "accessibility", state: "not_implemented" },

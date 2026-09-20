@@ -22,6 +22,7 @@ test("desktop agent serves authenticated status and capability requests", async 
     stateDir,
     capabilities: () => [
       { id: "windows", state: "not_implemented" },
+      { id: "displays", state: "not_implemented" },
       { id: "screen", state: "not_implemented" },
       { id: "input", state: "not_implemented" },
       { id: "accessibility", state: "not_implemented" },
@@ -44,7 +45,7 @@ test("desktop agent serves authenticated status and capability requests", async 
   const status = await client.status();
   assert.equal(status?.pid, process.pid);
   const capabilities = await client.capabilities();
-  assert.equal(capabilities.length, 10);
+  assert.equal(capabilities.length, 11);
   assert.ok(capabilities.every((capability) => capability.state === "not_implemented"));
 
   const unauthorized = await sendRaw(started.endpoint, encodeDesktopAgentRequest({
@@ -105,6 +106,62 @@ test("desktop agent serves a structured read-only window inventory", async (t) =
   });
 
   assert.deepEqual(await client.windows(), [expectedWindow]);
+});
+
+test("desktop agent serves a structured read-only display inventory", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-displays-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const expectedDisplay = {
+    id: 1,
+    name: "HDMI-A-1",
+    connected: true,
+    enabled: true,
+    active: true,
+    primary: true,
+    priority: 1,
+    x: 0,
+    y: 0,
+    width: 1920,
+    height: 1080,
+    scale: 1,
+    rotation: 1,
+    brightness: 0.8,
+    ddcCiAllowed: true,
+    physicalWidthMm: 521,
+    physicalHeightMm: 295,
+    currentModeId: "2",
+    currentMode: {
+      id: "2",
+      name: "1920x1080@100",
+      width: 1920,
+      height: 1080,
+      refreshRate: 100,
+    },
+    preferredModeIds: ["1"],
+    modes: [{
+      id: "2",
+      name: "1920x1080@100",
+      width: 1920,
+      height: 1080,
+      refreshRate: 100,
+    }],
+    clones: [],
+    replicationSource: 0,
+    connectorType: 6,
+  };
+  const daemon = new DesktopAgentDaemon({
+    stateDir,
+    capabilities: () => [{ id: "displays", state: "ready" }],
+    displays: async () => [expectedDisplay],
+  });
+  t.after(() => daemon.close());
+  await daemon.start();
+  const client = new DesktopAgentClient({
+    stateDir,
+    spawnDaemon: () => assert.fail("existing daemon should not be respawned"),
+  });
+
+  assert.deepEqual(await client.displays(), [expectedDisplay]);
 });
 
 test("desktop agent client can auto-start and stop an isolated daemon", async (t) => {

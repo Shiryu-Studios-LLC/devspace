@@ -9,6 +9,7 @@ import {
 import type {
   DesktopAgentStatus,
   DesktopCapabilityStatus,
+  DesktopDisplayInfo,
   DesktopWindowInfo,
 } from "../desktop-agent-protocol.js";
 
@@ -145,6 +146,73 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
 
   registerAppTool(
     server,
+    "desktop_list_displays",
+    {
+      title: "List Desktop Displays",
+      description:
+        "List KDE/KScreen displays from the isolated desktop agent, including layout, current mode, refresh rate, scale, rotation, brightness, physical size, priority, and active/primary status. Read-only.",
+      inputSchema: {},
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        displays: z.array(z.object({
+          id: z.number().int(),
+          name: z.string(),
+          connected: z.boolean(),
+          enabled: z.boolean(),
+          active: z.boolean(),
+          primary: z.boolean(),
+          priority: z.number().int(),
+          x: z.number(),
+          y: z.number(),
+          width: z.number(),
+          height: z.number(),
+          scale: z.number(),
+          rotation: z.number().int(),
+          brightness: z.number().optional(),
+          ddcCiAllowed: z.boolean().optional(),
+          physicalWidthMm: z.number().optional(),
+          physicalHeightMm: z.number().optional(),
+          currentModeId: z.string().optional(),
+          currentMode: z.object({
+            id: z.string(),
+            name: z.string(),
+            width: z.number(),
+            height: z.number(),
+            refreshRate: z.number().optional(),
+          }).optional(),
+          preferredModeIds: z.array(z.string()),
+          modes: z.array(z.object({
+            id: z.string(),
+            name: z.string(),
+            width: z.number(),
+            height: z.number(),
+            refreshRate: z.number().optional(),
+          })),
+          clones: z.array(z.number().int()),
+          replicationSource: z.number().int().optional(),
+          connectorType: z.number().int().optional(),
+        })).optional(),
+      },
+      _meta: {},
+      annotations: readAnnotations,
+    },
+    async () => {
+      try {
+        const displays = await client.displays();
+        const result = formatDisplaySummary(displays);
+        return {
+          content: [{ type: "text" as const, text: result }],
+          structuredContent: { status: "ready" as const, result, displays },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
     "desktop_agent_stop",
     {
       title: "Stop Desktop Agent",
@@ -209,6 +277,17 @@ function describeStatus(status: DesktopAgentStatus): string {
     `session ${status.sessionType}`,
     `protocol ${status.protocolVersion}`,
   ].join("; ");
+}
+
+function formatDisplaySummary(displays: DesktopDisplayInfo[]): string {
+  const enabled = displays.filter((display) => display.enabled && display.connected);
+  const active = enabled.find((display) => display.active);
+  const primary = enabled.find((display) => display.primary);
+  return [
+    `Desktop agent sees ${displays.length} display(s), ${enabled.length} enabled`,
+    active ? `active ${active.name}` : undefined,
+    primary ? `primary ${primary.name}` : undefined,
+  ].filter(Boolean).join("; ");
 }
 
 function formatWindowSummary(windows: DesktopWindowInfo[]): string {

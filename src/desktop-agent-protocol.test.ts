@@ -7,6 +7,7 @@ import {
   decodeDesktopAgentRequest,
   decodeDesktopAgentResponse,
   decodeDesktopAgentStatus,
+  decodeDesktopDisplayList,
   decodeDesktopWindowList,
   encodeDesktopAgentRequest,
   type DesktopAgentRequest,
@@ -30,6 +31,17 @@ test("desktop agent accepts the read-only windows list method", () => {
     protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
     authToken: "a".repeat(64),
     method: "windows.list",
+    params: {},
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
+});
+
+test("desktop agent accepts the read-only displays list method", () => {
+  const request: DesktopAgentRequest = {
+    requestId: "request-displays",
+    protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
+    authToken: "a".repeat(64),
+    method: "displays.list",
     params: {},
   };
   assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
@@ -77,6 +89,44 @@ test("desktop agent decodes a structured window list", () => {
   assert.equal(windows[0]?.title, "ChatGPT");
   assert.equal(windows[0]?.pid, 123);
   assert.equal(windows[0]?.maximizedHorizontal, true);
+});
+
+test("desktop agent decodes a structured display list", () => {
+  const displays = decodeDesktopDisplayList([{
+    id: 1,
+    name: "HDMI-A-1",
+    connected: true,
+    enabled: true,
+    active: true,
+    primary: true,
+    priority: 1,
+    x: 0,
+    y: 0,
+    width: 1920,
+    height: 1080,
+    scale: 1,
+    rotation: 1,
+    brightness: 0.8,
+    ddcCiAllowed: true,
+    physicalWidthMm: 521,
+    physicalHeightMm: 295,
+    currentModeId: "2",
+    currentMode: {
+      id: "2",
+      name: "1920x1080@100",
+      width: 1920,
+      height: 1080,
+      refreshRate: 100,
+    },
+    preferredModeIds: ["1"],
+    modes: [],
+    clones: [],
+    replicationSource: 0,
+    connectorType: 6,
+  }]);
+  assert.equal(displays[0]?.name, "HDMI-A-1");
+  assert.equal(displays[0]?.currentMode?.refreshRate, 100);
+  assert.equal(displays[0]?.active, true);
 });
 
 test("desktop agent response and status decode capability states", () => {

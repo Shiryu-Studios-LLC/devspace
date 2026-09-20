@@ -52,11 +52,47 @@ export interface DesktopWindowInfo {
   activities: string[];
 }
 
+export interface DesktopDisplayMode {
+  id: string;
+  name: string;
+  width: number;
+  height: number;
+  refreshRate?: number;
+}
+
+export interface DesktopDisplayInfo {
+  id: number;
+  name: string;
+  connected: boolean;
+  enabled: boolean;
+  active: boolean;
+  primary: boolean;
+  priority: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  scale: number;
+  rotation: number;
+  brightness?: number;
+  ddcCiAllowed?: boolean;
+  physicalWidthMm?: number;
+  physicalHeightMm?: number;
+  currentModeId?: string;
+  currentMode?: DesktopDisplayMode;
+  preferredModeIds: string[];
+  modes: DesktopDisplayMode[];
+  clones: number[];
+  replicationSource?: number;
+  connectorType?: number;
+}
+
 export type DesktopAgentMethod =
   | "hello"
   | "desktop.status"
   | "desktop.capabilities"
   | "windows.list"
+  | "displays.list"
   | "desktop.stop";
 
 export type DesktopAgentRequest = {
@@ -169,6 +205,13 @@ export function decodeDesktopWindowList(value: unknown): DesktopWindowInfo[] {
   return value.map(decodeDesktopWindowInfo);
 }
 
+export function decodeDesktopDisplayList(value: unknown): DesktopDisplayInfo[] {
+  if (!Array.isArray(value)) {
+    throw new DesktopAgentProtocolError("INVALID_DISPLAYS", "Desktop agent returned an invalid display list.");
+  }
+  return value.map(decodeDesktopDisplayInfo);
+}
+
 export function desktopAgentProtocolVersion(): number {
   return DESKTOP_AGENT_PROTOCOL_VERSION;
 }
@@ -209,6 +252,49 @@ function decodeDesktopWindowInfo(value: unknown): DesktopWindowInfo {
   };
 }
 
+function decodeDesktopDisplayInfo(value: unknown): DesktopDisplayInfo {
+  const record = asRecord(value);
+  if (!record) throw new DesktopAgentProtocolError("INVALID_DISPLAYS", "Desktop display must be an object.");
+  return {
+    id: requiredInteger(record.id, "display.id"),
+    name: requiredString(record.name, "display.name"),
+    connected: requiredBoolean(record.connected, "display.connected"),
+    enabled: requiredBoolean(record.enabled, "display.enabled"),
+    active: requiredBoolean(record.active, "display.active"),
+    primary: requiredBoolean(record.primary, "display.primary"),
+    priority: requiredInteger(record.priority, "display.priority"),
+    x: requiredNumber(record.x, "display.x"),
+    y: requiredNumber(record.y, "display.y"),
+    width: requiredNumber(record.width, "display.width"),
+    height: requiredNumber(record.height, "display.height"),
+    scale: requiredNumber(record.scale, "display.scale"),
+    rotation: requiredInteger(record.rotation, "display.rotation"),
+    brightness: optionalNumber(record.brightness),
+    ddcCiAllowed: optionalBoolean(record.ddcCiAllowed),
+    physicalWidthMm: optionalNumber(record.physicalWidthMm),
+    physicalHeightMm: optionalNumber(record.physicalHeightMm),
+    currentModeId: optionalString(record.currentModeId),
+    currentMode: record.currentMode === undefined ? undefined : decodeDesktopDisplayMode(record.currentMode),
+    preferredModeIds: stringArray(record.preferredModeIds, "display.preferredModeIds"),
+    modes: displayModeArray(record.modes, "display.modes"),
+    clones: integerArray(record.clones, "display.clones"),
+    replicationSource: optionalInteger(record.replicationSource),
+    connectorType: optionalInteger(record.connectorType),
+  };
+}
+
+function decodeDesktopDisplayMode(value: unknown): DesktopDisplayMode {
+  const record = asRecord(value);
+  if (!record) throw new DesktopAgentProtocolError("INVALID_DISPLAYS", "Desktop display mode must be an object.");
+  return {
+    id: requiredString(record.id, "display.mode.id"),
+    name: requiredString(record.name, "display.mode.name"),
+    width: requiredNumber(record.width, "display.mode.width"),
+    height: requiredNumber(record.height, "display.mode.height"),
+    refreshRate: optionalNumber(record.refreshRate),
+  };
+}
+
 function decodeCapabilityStatus(value: unknown): DesktopCapabilityStatus {
   const record = asRecord(value);
   const state = requiredString(record?.state, "capability.state");
@@ -227,6 +313,7 @@ function isDesktopAgentMethod(value: string): value is DesktopAgentMethod {
     || value === "desktop.status"
     || value === "desktop.capabilities"
     || value === "windows.list"
+    || value === "displays.list"
     || value === "desktop.stop";
 }
 
@@ -258,7 +345,7 @@ function optionalBoolean(value: unknown): boolean | undefined {
 
 function requiredBoolean(value: unknown, field: string): boolean {
   if (typeof value !== "boolean") {
-    throw new DesktopAgentProtocolError("INVALID_WINDOWS", `Invalid ${field}.`);
+    throw new DesktopAgentProtocolError("INVALID_RESPONSE", `Invalid ${field}.`);
   }
   return value;
 }
@@ -271,9 +358,31 @@ function optionalNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function requiredNumber(value: unknown, field: string): number {
+  const result = optionalNumber(value);
+  if (result === undefined) {
+    throw new DesktopAgentProtocolError("INVALID_RESPONSE", `Invalid ${field}.`);
+  }
+  return result;
+}
+
 function stringArray(value: unknown, field: string): string[] {
   if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
-    throw new DesktopAgentProtocolError("INVALID_WINDOWS", `Invalid ${field}.`);
+    throw new DesktopAgentProtocolError("INVALID_RESPONSE", `Invalid ${field}.`);
   }
   return value as string[];
+}
+
+function integerArray(value: unknown, field: string): number[] {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "number" || !Number.isSafeInteger(item))) {
+    throw new DesktopAgentProtocolError("INVALID_DISPLAYS", `Invalid ${field}.`);
+  }
+  return value as number[];
+}
+
+function displayModeArray(value: unknown, field: string): DesktopDisplayMode[] {
+  if (!Array.isArray(value)) {
+    throw new DesktopAgentProtocolError("INVALID_DISPLAYS", `Invalid ${field}.`);
+  }
+  return value.map(decodeDesktopDisplayMode);
 }
