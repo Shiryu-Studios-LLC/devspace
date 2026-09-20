@@ -20,6 +20,7 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [x] Baseline typecheck, regression tests, and production build.
 - [x] Add a secondary-module registry with fault isolation.
 - [x] Add module health states.
+- [x] Establish in-place module boundaries for workspace, agents, filesystem, reviews, search, shell, and process tooling before physically extracting them from `server.ts`.
 - [x] Wrap the existing upstream MCP bridge as a secondary module.
 - [x] Wrap Git tooling as a secondary module.
 - [x] Wrap the elevated admin broker as a secondary module.
@@ -35,7 +36,8 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [ ] Extract review/checkpoint tool registration from `server.ts`.
 - [ ] Keep authentication, configuration, persistence, MCP transport, and module lifecycle in core.
 - [ ] Compare the complete MCP tool/schema surface before and after extraction.
-- [ ] Run a second DevSpace instance on a separate port/service identity for end-to-end testing.
+- [x] Prove a second development build can start on a separate port with separate state while production remains healthy.
+- [ ] Run authenticated MCP end-to-end testing against a persistent second DevSpace service identity.
 
 ## Phase 0B — Desktop agent foundation
 

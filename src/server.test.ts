@@ -176,10 +176,25 @@ test("module status keeps core health separate from secondary modules", async (t
 
   const modules = state.modules as Array<{ id: string; status: string }>;
   const statuses = new Map(modules.map((module) => [module.id, module.status]));
-  for (const id of ["upstream-mcp", "git", "admin", "desktop-windows", "artifacts"]) {
+  for (const id of [
+    "upstream-mcp",
+    "workspace",
+    "agents",
+    "filesystem",
+    "reviews",
+    "filesystem-search",
+    "shell",
+    "process",
+    "git",
+    "admin",
+    "desktop-windows",
+    "artifacts",
+  ]) {
     assert.equal(statuses.has(id), true, `${id} should report module health`);
   }
   assert.equal(statuses.get("upstream-mcp"), "ready");
+  assert.equal(statuses.get("workspace"), "ready");
+  assert.equal(statuses.get("filesystem"), "ready");
   assert.equal(statuses.get("git"), "ready");
   assert.equal(statuses.get("admin"), "ready");
 });

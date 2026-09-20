@@ -818,6 +818,9 @@ export function createMcpServer(
     },
   );
 
+  moduleRegistry.register({
+    id: "workspace",
+    register: () => {
   registerAppTool(
     server,
     "open_workspace",
@@ -1019,8 +1022,13 @@ export function createMcpServer(
       };
     },
   );
+    },
+  }, moduleContext);
 
-  if (config.subagents.enabled) {
+  moduleRegistry.register({
+    id: "agents",
+    enabled: () => config.subagents.enabled,
+    register: () => {
     const localAgentClient = createLocalAgentClient(config);
     const agentScope = (workspaceId: string) => {
       const workspace = workspaces.getWorkspace(workspaceId);
@@ -1220,8 +1228,12 @@ export function createMcpServer(
         };
       },
     );
-  }
+    },
+  }, moduleContext);
 
+  moduleRegistry.register({
+    id: "filesystem",
+    register: () => {
   registerAppTool(
     server,
     toolNames.read,
@@ -1559,8 +1571,13 @@ export function createMcpServer(
       },
     );
   }
+    },
+  }, moduleContext);
 
-  if (config.widgets === "changes") {
+  moduleRegistry.register({
+    id: "reviews",
+    enabled: () => config.widgets === "changes",
+    register: () => {
     registerAppTool(
       server,
       "show_changes",
@@ -1613,9 +1630,13 @@ export function createMcpServer(
         };
       },
     );
-  }
+    },
+  }, moduleContext);
 
-  if (config.toolMode === "full") {
+  moduleRegistry.register({
+    id: "filesystem-search",
+    enabled: () => config.toolMode === "full",
+    register: () => {
     registerAppTool(
       server,
       toolNames.grep,
@@ -1824,9 +1845,13 @@ export function createMcpServer(
         };
       },
     );
-  }
+    },
+  }, moduleContext);
 
-  if (config.toolMode !== "codex") {
+  moduleRegistry.register({
+    id: "shell",
+    enabled: () => config.toolMode !== "codex",
+    register: () => {
   registerAppTool(
     server,
     toolNames.shell,
@@ -1916,11 +1941,14 @@ export function createMcpServer(
       };
     },
   );
-  }
+    },
+  }, moduleContext);
 
-  if (config.toolMode === "codex") {
-    registerCodexProcessTools(server, config, workspaces, processSessions);
-  }
+  moduleRegistry.register({
+    id: "process",
+    enabled: () => config.toolMode === "codex",
+    register: () => registerCodexProcessTools(server, config, workspaces, processSessions),
+  }, moduleContext);
 
   moduleRegistry.registerMany(lateBuiltinModules, moduleContext);
   registerModuleStatusTool(server, moduleRegistry);
