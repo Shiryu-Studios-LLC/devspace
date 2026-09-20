@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createConnection } from "node:net";
+import { createConnection, createServer as createNetServer } from "node:net";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,10 +11,13 @@ import { defaultDesktopPermissionPolicy } from "./desktop-permissions.js";
 import {
   DESKTOP_AGENT_PROTOCOL_VERSION,
   desktopAgentPaths,
+  ensureDesktopAgentSecret,
+  readDesktopAgentSecret,
 } from "./desktop-agent-lifecycle.js";
 import {
   decodeDesktopAgentResponse,
   encodeDesktopAgentRequest,
+  encodeDesktopAgentResponse,
 } from "./desktop-agent-protocol.js";
 
 test("desktop agent serves authenticated status and capability requests", async (t) => {
@@ -55,6 +58,29 @@ test("desktop agent serves authenticated status and capability requests", async 
   assert.equal(permissions.find((permission) => permission.id === "windows")?.granted, true);
   assert.equal(permissions.find((permission) => permission.id === "screen")?.granted, true);
 
+  const authToken = readDesktopAgentSecret(desktopAgentPaths(stateDir));
+  assert.ok(authToken);
+  const compatibleV1 = await sendRaw(started.endpoint, encodeDesktopAgentRequest({
+    requestId: "compatible-v1",
+    protocolVersion: 1,
+    authToken,
+    method: "hello",
+    params: {},
+  }));
+  assert.equal(compatibleV1.ok, true);
+  assert.equal(compatibleV1.protocolVersion, 1);
+
+  const incompatible = await sendRaw(started.endpoint, encodeDesktopAgentRequest({
+    requestId: "incompatible",
+    protocolVersion: 99,
+    authToken,
+    method: "hello",
+    params: {},
+  }));
+  assert.equal(incompatible.ok, false);
+  assert.equal(incompatible.protocolVersion, DESKTOP_AGENT_PROTOCOL_VERSION);
+  if (!incompatible.ok) assert.equal(incompatible.error.code, "DESKTOP_AGENT_PROTOCOL_MISMATCH");
+
   const unauthorized = await sendRaw(started.endpoint, encodeDesktopAgentRequest({
     requestId: "bad-auth",
     protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
@@ -64,6 +90,73 @@ test("desktop agent serves authenticated status and capability requests", async 
   }));
   assert.equal(unauthorized.ok, false);
   if (!unauthorized.ok) assert.equal(unauthorized.error.code, "DESKTOP_AGENT_UNAUTHORIZED");
+});
+
+test("desktop agent client negotiates down to a compatible v1-only agent", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-v1-negotiation-"));
+  const paths = desktopAgentPaths(stateDir);
+  const authToken = ensureDesktopAgentSecret(paths);
+  const seenVersions: number[] = [];
+  const server = createNetServer((socket) => {
+    socket.setEncoding("utf8");
+    let buffer = "";
+    socket.on("data", (chunk) => {
+      buffer += chunk.toString();
+      const newline = buffer.indexOf("\n");
+      if (newline === -1) return;
+      const request = JSON.parse(buffer.slice(0, newline)) as {
+        requestId: string;
+        protocolVersion: number;
+        authToken: string;
+      };
+      seenVersions.push(request.protocolVersion);
+      assert.equal(request.authToken, authToken);
+      if (request.protocolVersion !== 1) {
+        socket.end(encodeDesktopAgentResponse({
+          requestId: request.requestId,
+          protocolVersion: 1,
+          ok: false,
+          error: {
+            code: "DESKTOP_AGENT_PROTOCOL_MISMATCH",
+            message: "Expected protocol 1.",
+          },
+        }));
+        return;
+      }
+      socket.end(encodeDesktopAgentResponse({
+        requestId: request.requestId,
+        protocolVersion: 1,
+        ok: true,
+        result: {
+          state: "ready",
+          protocolVersion: 1,
+          pid: 1234,
+          endpoint: paths.endpoint,
+          startedAt: new Date(0).toISOString(),
+          platform: process.platform,
+          sessionType: "test",
+          clientConnections: 1,
+          capabilities: [],
+        },
+      }));
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(paths.endpoint, resolve);
+  });
+  t.after(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(stateDir, { recursive: true, force: true });
+  });
+
+  const client = new DesktopAgentClient({
+    stateDir,
+    spawnDaemon: () => assert.fail("v1 test agent should not be respawned"),
+  });
+  const status = await client.status();
+  assert.equal(status?.protocolVersion, 1);
+  assert.deepEqual(seenVersions, [DESKTOP_AGENT_PROTOCOL_VERSION, 1]);
 });
 
 test("desktop agent hot-applies permission changes without restarting", async (t) => {

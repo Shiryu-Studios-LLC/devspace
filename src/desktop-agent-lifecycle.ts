@@ -12,7 +12,14 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 
-export const DESKTOP_AGENT_PROTOCOL_VERSION = 1;
+export const DESKTOP_AGENT_PROTOCOL_VERSION = 2;
+export const DESKTOP_AGENT_PROTOCOL_MIN_VERSION = 1;
+
+export function desktopAgentProtocolSupported(version: number): boolean {
+  return Number.isInteger(version)
+    && version >= DESKTOP_AGENT_PROTOCOL_MIN_VERSION
+    && version <= DESKTOP_AGENT_PROTOCOL_VERSION;
+}
 const SOCKET_NAME = "desktop-agent.sock";
 const PID_NAME = "desktop-agent.pid";
 const LOCK_NAME = "desktop-agent.lock";

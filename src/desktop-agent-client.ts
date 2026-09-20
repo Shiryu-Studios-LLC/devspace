@@ -5,6 +5,7 @@ import { createConnection } from "node:net";
 import { fileURLToPath } from "node:url";
 import {
   DESKTOP_AGENT_PROTOCOL_VERSION,
+  desktopAgentProtocolSupported,
   desktopAgentPaths,
   readDesktopAgentSecret,
   type DesktopAgentPaths,
@@ -79,6 +80,7 @@ export class DesktopAgentClient {
   private readonly requestTimeoutMs: number;
   private readonly spawnDaemon: () => void;
   private startupPromise?: Promise<DesktopAgentStatus>;
+  private negotiatedProtocolVersion = DESKTOP_AGENT_PROTOCOL_VERSION;
 
   constructor(options: DesktopAgentClientOptions) {
     this.paths = desktopAgentPaths(options.stateDir);
@@ -216,21 +218,10 @@ export class DesktopAgentClient {
     const token = readDesktopAgentSecret(this.paths);
     if (!token) return undefined;
     try {
-      const response = await sendRequest(
-        this.endpoint,
-        request("hello", token),
-        this.requestTimeoutMs,
-      );
+      const response = await this.sendNegotiatedRequest("hello", token);
       if (!response.ok) {
         if (response.error.code === "DESKTOP_AGENT_UNAVAILABLE") return undefined;
         throw remoteError(response);
-      }
-      if (response.protocolVersion !== DESKTOP_AGENT_PROTOCOL_VERSION) {
-        throw new DesktopAgentClientError(
-          "DESKTOP_AGENT_PROTOCOL_MISMATCH",
-          `Desktop agent protocol ${response.protocolVersion} does not match ${DESKTOP_AGENT_PROTOCOL_VERSION}.`,
-          true,
-        );
       }
       return decodeStatus(response.result);
     } catch (error) {
@@ -256,27 +247,59 @@ export class DesktopAgentClient {
     if (!token) {
       throw new DesktopAgentClientError("DESKTOP_AGENT_UNAVAILABLE", "Desktop agent is not running.", true);
     }
-    const response = await sendRequest(
-      this.endpoint,
-      request(method, token, params),
-      this.requestTimeoutMs,
-    );
+    const response = await this.sendNegotiatedRequest(method, token, params);
     if (!response.ok) throw remoteError(response);
-    if (response.protocolVersion !== DESKTOP_AGENT_PROTOCOL_VERSION) {
+    return response.result;
+  }
+
+  private async sendNegotiatedRequest(
+    method: DesktopAgentMethod,
+    authToken: string,
+    params: Record<string, unknown> = {},
+  ): Promise<DesktopAgentResponse> {
+    let protocolVersion = this.negotiatedProtocolVersion;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await sendRequest(
+        this.endpoint,
+        request(method, authToken, params, protocolVersion),
+        this.requestTimeoutMs,
+      );
+      if (response.protocolVersion === protocolVersion) {
+        this.negotiatedProtocolVersion = protocolVersion;
+        return response;
+      }
+      if (
+        !response.ok
+        && response.error.code === "DESKTOP_AGENT_PROTOCOL_MISMATCH"
+        && desktopAgentProtocolSupported(response.protocolVersion)
+      ) {
+        protocolVersion = response.protocolVersion;
+        this.negotiatedProtocolVersion = protocolVersion;
+        continue;
+      }
       throw new DesktopAgentClientError(
         "DESKTOP_AGENT_PROTOCOL_MISMATCH",
-        `Desktop agent protocol ${response.protocolVersion} does not match ${DESKTOP_AGENT_PROTOCOL_VERSION}.`,
-        true,
+        `Desktop agent protocol ${response.protocolVersion} is incompatible with supported client protocols.`,
+        false,
       );
     }
-    return response.result;
+    throw new DesktopAgentClientError(
+      "DESKTOP_AGENT_PROTOCOL_MISMATCH",
+      "Desktop agent protocol negotiation failed.",
+      false,
+    );
   }
 }
 
-function request(method: DesktopAgentMethod, authToken: string, params: Record<string, unknown> = {}): DesktopAgentRequest {
+function request(
+  method: DesktopAgentMethod,
+  authToken: string,
+  params: Record<string, unknown> = {},
+  protocolVersion = DESKTOP_AGENT_PROTOCOL_VERSION,
+): DesktopAgentRequest {
   return {
     requestId: randomUUID(),
-    protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
+    protocolVersion,
     authToken,
     method,
     params,

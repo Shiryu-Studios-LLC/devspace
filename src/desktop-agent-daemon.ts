@@ -38,7 +38,9 @@ import {
 import { appendFileSync, chmodSync, rmSync } from "node:fs";
 import { createServer, type Server as NetServer, type Socket } from "node:net";
 import {
+  DESKTOP_AGENT_PROTOCOL_MIN_VERSION,
   DESKTOP_AGENT_PROTOCOL_VERSION,
+  desktopAgentProtocolSupported,
   DesktopAgentAlreadyRunningError,
   DesktopAgentLock,
   desktopAgentPaths,
@@ -327,7 +329,7 @@ export class DesktopAgentDaemon {
       const result = await this.dispatch(request);
       socket.end(encodeDesktopAgentResponse({
         requestId: request.requestId,
-        protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
+        protocolVersion: request.protocolVersion,
         ok: true,
         result,
       }));
@@ -345,10 +347,10 @@ export class DesktopAgentDaemon {
   }
 
   private async dispatch(request: DesktopAgentRequest): Promise<unknown> {
-    if (request.protocolVersion !== DESKTOP_AGENT_PROTOCOL_VERSION) {
+    if (!desktopAgentProtocolSupported(request.protocolVersion)) {
       throw new DesktopAgentProtocolError(
         "DESKTOP_AGENT_PROTOCOL_MISMATCH",
-        `Unsupported desktop agent protocol ${request.protocolVersion}; expected ${DESKTOP_AGENT_PROTOCOL_VERSION}.`,
+        `Unsupported desktop agent protocol ${request.protocolVersion}; supported range is ${DESKTOP_AGENT_PROTOCOL_MIN_VERSION}-${DESKTOP_AGENT_PROTOCOL_VERSION}.`,
       );
     }
     this.assertAuthenticated(request.authToken);

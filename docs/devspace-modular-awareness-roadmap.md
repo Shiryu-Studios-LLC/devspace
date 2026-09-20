@@ -43,7 +43,7 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 
 - [x] Add a separate `devspace-desktop-agent` process/service.
 - [x] Use local authenticated IPC between DevSpace core and the desktop agent.
-- [ ] Add protocol version negotiation beyond strict version validation.
+- [x] Add backward-compatible desktop-agent protocol negotiation; protocol v2 accepts v1-v2 and v2 clients retry once against compatible older v1 agents.
 - [x] Add capability discovery.
 - [x] Add bounded reconnect/backoff for mid-request desktop-agent transport loss without retrying permission, protocol, or provider errors.
 - [x] Add per-capability permissions with read-only status reporting; all desktop permissions default granted, with explicit per-capability config overrides available to disable them.
