@@ -3,7 +3,7 @@ import test from "node:test";
 import { DevSpaceModuleRegistry } from "./registry.js";
 import type { DevSpaceModuleContext } from "./types.js";
 
-const context = {} as DevSpaceModuleContext;
+const context = { server: {} } as unknown as DevSpaceModuleContext;
 
 test("secondary modules report ready after successful registration", () => {
   const registry = new DevSpaceModuleRegistry();
@@ -41,6 +41,43 @@ test("disabled secondary modules do not register", () => {
 
   assert.equal(registered, false);
   assert.deepEqual(state, { id: "disabled-module", status: "disabled" });
+});
+
+test("hot reload replaces tracked module registrations in place", () => {
+  const registry = new DevSpaceModuleRegistry();
+  const active = new Set<string>();
+  const server = {
+    registerTool(name: string) {
+      active.add(name);
+      return {
+        remove() {
+          active.delete(name);
+        },
+      };
+    },
+  };
+  const reloadContext = { server } as unknown as DevSpaceModuleContext;
+
+  registry.register({
+    id: "hot",
+    register: ({ server: tracked }) => {
+      tracked.registerTool("old_tool", { inputSchema: {} }, async () => ({ content: [] }));
+    },
+  }, reloadContext);
+  assert.deepEqual([...active], ["old_tool"]);
+
+  registry.reload({
+    id: "hot",
+    register: ({ server: tracked }) => {
+      tracked.registerTool("new_tool", { inputSchema: {} }, async () => ({ content: [] }));
+    },
+  }, reloadContext);
+  assert.deepEqual([...active], ["new_tool"]);
+  assert.deepEqual(registry.get("hot"), { id: "hot", status: "ready" });
+
+  assert.equal(registry.remove("hot"), true);
+  assert.deepEqual([...active], []);
+  assert.equal(registry.get("hot"), undefined);
 });
 
 test("a failed secondary module does not take down the registry", () => {

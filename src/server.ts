@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { access, realpath } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -34,16 +34,12 @@ import {
 } from "./mcp-sessions.js";
 import { ProcessSessionManager } from "./process-sessions.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
-import { registerAgentTools } from "./modules/agents.js";
-import { lateBuiltinModules, upstreamMcpModule } from "./modules/builtin.js";
-import { registerFilesystemSearchTools } from "./modules/filesystem-search.js";
-import { registerFilesystemTools } from "./modules/filesystem.js";
-import { registerCodexProcessTools } from "./modules/process.js";
+import { hotReloadableModules } from "./modules/hot-entry.js";
+import { watchHotModuleBundle } from "./modules/hot-loader.js";
+import { DevSpaceHotModuleSession } from "./modules/hot-session.js";
 import { DevSpaceModuleRegistry } from "./modules/registry.js";
-import { registerReviewTools } from "./modules/reviews.js";
-import { registerShellTools } from "./modules/shell.js";
 import { registerModuleStatusTool } from "./modules/status-tool.js";
-import { registerWorkspaceTools } from "./modules/workspace.js";
+import type { DevSpaceModule } from "./modules/types.js";
 import { shutdownHttpServer } from "./server-shutdown.js";
 import { createWorkspaceStore } from "./workspace-store.js";
 import { WorkspaceRegistry } from "./workspaces.js";
@@ -223,6 +219,11 @@ async function assertWorkspaceAppAssets(): Promise<void> {
   }
 }
 
+export interface CreateMcpServerOptions {
+  hotModules?: readonly DevSpaceModule[];
+  onHotSession?: (session: DevSpaceHotModuleSession) => void;
+}
+
 export function createMcpServer(
   config: ServerConfig,
   workspaces: WorkspaceRegistry,
@@ -230,6 +231,7 @@ export function createMcpServer(
   processSessions: ProcessSessionManager,
   resolveLocalAgentProviders: () => LocalAgentProviderStatus[],
   incomingArtifactAdapters: readonly IncomingArtifactAdapter[],
+  options: CreateMcpServerOptions = {},
 ): McpServer {
   const server = new McpServer(
     {
@@ -245,8 +247,18 @@ export function createMcpServer(
   );
 
   const moduleRegistry = new DevSpaceModuleRegistry();
-  const moduleContext = { server, config, workspaces, incomingArtifactAdapters };
-  moduleRegistry.register(upstreamMcpModule, moduleContext);
+  const moduleContext = {
+    server,
+    config,
+    workspaces,
+    reviewCheckpoints,
+    processSessions,
+    resolveLocalAgentProviders,
+    incomingArtifactAdapters,
+  };
+  const activeHotModules = options.hotModules ?? hotReloadableModules;
+  const upstreamHotModule = activeHotModules.find((module) => module.id === "upstream-mcp");
+  if (upstreamHotModule) moduleRegistry.register(upstreamHotModule, moduleContext);
 
   registerAppResource(
     server,
@@ -281,53 +293,12 @@ export function createMcpServer(
     },
   );
 
-  moduleRegistry.register({
-    id: "workspace",
-    register: () => registerWorkspaceTools(
-      server,
-      config,
-      workspaces,
-      reviewCheckpoints,
-      resolveLocalAgentProviders,
-    ),
-  }, moduleContext);
-
-  moduleRegistry.register({
-    id: "agents",
-    enabled: () => config.subagents.enabled,
-    register: () => registerAgentTools(server, config, workspaces),
-  }, moduleContext);
-
-  moduleRegistry.register({
-    id: "filesystem",
-    register: () => registerFilesystemTools(server, config, workspaces),
-  }, moduleContext);
-
-  moduleRegistry.register({
-    id: "reviews",
-    enabled: () => config.widgets === "changes",
-    register: () => registerReviewTools(server, config, workspaces, reviewCheckpoints),
-  }, moduleContext);
-
-  moduleRegistry.register({
-    id: "filesystem-search",
-    enabled: () => config.toolMode === "full",
-    register: () => registerFilesystemSearchTools(server, config, workspaces),
-  }, moduleContext);
-
-  moduleRegistry.register({
-    id: "shell",
-    enabled: () => config.toolMode !== "codex",
-    register: () => registerShellTools(server, config, workspaces),
-  }, moduleContext);
-
-  moduleRegistry.register({
-    id: "process",
-    enabled: () => config.toolMode === "codex",
-    register: () => registerCodexProcessTools(server, config, workspaces, processSessions),
-  }, moduleContext);
-
-  moduleRegistry.registerMany(lateBuiltinModules, moduleContext);
+  moduleRegistry.registerMany(
+    activeHotModules.filter((module) => module.id !== "upstream-mcp"),
+    moduleContext,
+  );
+  const hotSession = new DevSpaceHotModuleSession(moduleRegistry, moduleContext, activeHotModules);
+  options.onHotSession?.(hotSession);
   registerModuleStatusTool(server, moduleRegistry);
 
   return server;
@@ -376,6 +347,27 @@ export function createServer(
     config.subagents,
     getLocalAgentProviderAvailabilitySnapshot(),
   );
+  let currentHotModules: readonly DevSpaceModule[] = hotReloadableModules;
+  const hotModuleSessions = new Set<DevSpaceHotModuleSession>();
+  const hotModuleBundlePath = fileURLToPath(new URL("./hot-modules.mjs", import.meta.url));
+  const stopHotModuleWatcher = existsSync(hotModuleBundlePath)
+    ? watchHotModuleBundle({
+        bundlePath: hotModuleBundlePath,
+        onModules: (modules) => {
+          currentHotModules = modules;
+          for (const session of hotModuleSessions) session.reload(modules);
+          logEvent(config.logging, "info", "hot_modules_reloaded", {
+            moduleIds: modules.map((module) => module.id),
+            sessionCount: hotModuleSessions.size,
+          });
+        },
+        onError: (error) => {
+          logEvent(config.logging, "error", "hot_modules_reload_failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        },
+      })
+    : () => undefined;
 
   const logSessionCloseResults = (
     reason: "idle_timeout" | "server_shutdown",
@@ -593,6 +585,7 @@ export function createServer(
           return;
         }
       } else if (initializeRequest) {
+        let hotModuleSession: DevSpaceHotModuleSession | undefined;
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (newSessionId) => {
@@ -606,6 +599,7 @@ export function createServer(
         });
 
         transport.onclose = () => {
+          if (hotModuleSession) hotModuleSessions.delete(hotModuleSession);
           const closedSessionId = transport?.sessionId;
           if (closedSessionId && transports.remove(closedSessionId)) {
             logEvent(config.logging, "info", "mcp_session_closed", {
@@ -622,6 +616,13 @@ export function createServer(
           processSessions,
           resolveLocalAgentProviders,
           incomingArtifactAdapters,
+          {
+            hotModules: currentHotModules,
+            onHotSession: (session) => {
+              hotModuleSession = session;
+              hotModuleSessions.add(session);
+            },
+          },
         );
         await server.connect(transport);
       } else {
@@ -649,6 +650,8 @@ export function createServer(
     close: () => {
       closePromise ??= (async () => {
         clearInterval(sessionCleanupTimer);
+        stopHotModuleWatcher();
+        hotModuleSessions.clear();
         const results = await transports.closeAll();
         logSessionCloseResults("server_shutdown", results);
         processSessions.shutdown();

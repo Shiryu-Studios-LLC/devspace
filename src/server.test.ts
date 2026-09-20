@@ -11,6 +11,8 @@ import { loadConfig, type ServerConfig } from "./config.js";
 import type { LocalAgentProviderAvailability } from "./local-agent-availability.js";
 import { buildLocalAgentProviderStatuses } from "./local-agent-catalog.js";
 import type { SubagentsConfig } from "./local-agent-config.js";
+import type { DevSpaceHotModuleSession } from "./modules/hot-session.js";
+import type { DevSpaceModule } from "./modules/types.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { ProcessSessionManager } from "./process-sessions.js";
 import { createMcpServer, createServer } from "./server.js";
@@ -224,6 +226,43 @@ test("module status keeps core health separate from secondary modules", async (t
       `${name} should be exposed by the desktop-agent module`,
     );
   }
+});
+
+test("hot secondary modules replace tools on an already-connected MCP session", async (t) => {
+  const versionOne: DevSpaceModule = {
+    id: "hot-test",
+    register: ({ server }) => {
+      server.registerTool(
+        "hot_tool_v1",
+        { inputSchema: {} },
+        async () => ({ content: [{ type: "text" as const, text: "v1" }] }),
+      );
+    },
+  };
+  const context = await fixture(t, { hotModules: [versionOne] });
+  assert.ok(context.hotSession);
+
+  const before = await context.client.listTools();
+  assert.equal(before.tools.some((tool) => tool.name === "hot_tool_v1"), true);
+  assert.equal(before.tools.some((tool) => tool.name === "hot_tool_v2"), false);
+
+  const versionTwo: DevSpaceModule = {
+    id: "hot-test",
+    register: ({ server }) => {
+      server.registerTool(
+        "hot_tool_v2",
+        { inputSchema: {} },
+        async () => ({ content: [{ type: "text" as const, text: "v2" }] }),
+      );
+    },
+  };
+  context.hotSession.reload([versionTwo]);
+
+  const after = await context.client.listTools();
+  assert.equal(after.tools.some((tool) => tool.name === "hot_tool_v1"), false);
+  assert.equal(after.tools.some((tool) => tool.name === "hot_tool_v2"), true);
+  const result = await context.client.callTool({ name: "hot_tool_v2", arguments: {} });
+  assert.equal(responseText(result), "v2");
 });
 
 test("concurrent checkout opens return one full context and one reuse instruction", async (t) => {
@@ -452,6 +491,7 @@ interface ServerFixture {
   project: string;
   config: ServerConfig;
   stateDir: string;
+  hotSession?: DevSpaceHotModuleSession;
   close: () => Promise<void>;
 }
 
@@ -461,6 +501,7 @@ async function fixture(
     git?: boolean;
     localAgentProviders?: LocalAgentProviderAvailability[] | (() => LocalAgentProviderAvailability[]);
     subagents?: SubagentsConfig;
+    hotModules?: readonly DevSpaceModule[];
   } = {},
 ): Promise<ServerFixture> {
   const root = await mkdtemp(join(tmpdir(), "devspace-server-test-"));
@@ -526,6 +567,7 @@ async function fixture(
   );
   const store = new SqliteWorkspaceStore(stateDir);
   const workspaces = new WorkspaceRegistry(config, store);
+  let hotSession: DevSpaceHotModuleSession | undefined;
   const server = createMcpServer(
     config,
     workspaces,
@@ -533,6 +575,12 @@ async function fixture(
     new ProcessSessionManager(),
     resolveLocalAgentProviders,
     [],
+    {
+      hotModules: options.hotModules,
+      onHotSession: (session) => {
+        hotSession = session;
+      },
+    },
   );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "devspace-test-client", version: "1.0.0" });
@@ -555,7 +603,7 @@ async function fixture(
     await rm(root, { recursive: true, force: true });
   });
 
-  return { client, project, config, stateDir, close };
+  return { client, project, config, stateDir, hotSession, close };
 }
 
 async function git(cwd: string, args: string[]): Promise<void> {

@@ -48,6 +48,7 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [x] Add bounded reconnect/backoff for mid-request desktop-agent transport loss without retrying permission, protocol, or provider errors.
 - [x] Add per-capability permissions with read-only status reporting; all desktop permissions default granted, with explicit per-capability config overrides available to disable them.
 - [x] Hot-reload desktop permission config inside the isolated Desktop Agent without restarting DevSpace or the agent process.
+- [x] Hot-reload bundled secondary MCP modules in place on active sessions while the HTTP/auth/storage core stays resident; atomic deployment activates changes by replacing `dist/hot-modules.mjs` last.
 - [x] Add health reporting and a kill switch.
 - [x] Ensure agent failure never terminates DevSpace core.
 - [x] Launch Linux desktop agent through the user systemd manager so it inherits the active KDE graphical-session environment while core remains detached.
