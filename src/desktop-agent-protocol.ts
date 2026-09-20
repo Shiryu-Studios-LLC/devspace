@@ -8,6 +8,12 @@ export interface DesktopCapabilityStatus {
   detail?: string;
 }
 
+export interface DesktopPermissionStatus {
+  id: string;
+  granted: boolean;
+  defaultGranted: boolean;
+}
+
 export interface DesktopAgentStatus {
   state: "ready" | "stopping";
   protocolVersion: number;
@@ -360,6 +366,7 @@ export type DesktopAgentMethod =
   | "hello"
   | "desktop.status"
   | "desktop.capabilities"
+  | "desktop.permissions"
   | "windows.list"
   | "displays.list"
   | "processes.list"
@@ -533,6 +540,21 @@ export function decodeDesktopAgentStatus(value: unknown): DesktopAgentStatus {
     clientConnections: requiredInteger(record?.clientConnections, "clientConnections"),
     capabilities: capabilities.map(decodeCapabilityStatus),
   };
+}
+
+export function decodeDesktopPermissionStatuses(value: unknown): DesktopPermissionStatus[] {
+  if (!Array.isArray(value)) {
+    throw new DesktopAgentProtocolError("INVALID_PERMISSIONS", "Desktop agent returned invalid permission states.");
+  }
+  return value.map((entry) => {
+    const record = asRecord(entry);
+    if (!record) throw new DesktopAgentProtocolError("INVALID_PERMISSIONS", "Desktop permission must be an object.");
+    return {
+      id: requiredString(record.id, "permission.id"),
+      granted: requiredBoolean(record.granted, "permission.granted"),
+      defaultGranted: requiredBoolean(record.defaultGranted, "permission.defaultGranted"),
+    };
+  });
 }
 
 export function decodeDesktopWindowList(value: unknown): DesktopWindowInfo[] {
@@ -1056,6 +1078,7 @@ function isDesktopAgentMethod(value: string): value is DesktopAgentMethod {
   return value === "hello"
     || value === "desktop.status"
     || value === "desktop.capabilities"
+    || value === "desktop.permissions"
     || value === "windows.list"
     || value === "displays.list"
     || value === "processes.list"

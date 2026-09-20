@@ -8,6 +8,7 @@ import {
   decodeDesktopAgentResponse,
   decodeDesktopActivityTimeline,
   decodeDesktopAgentStatus,
+  decodeDesktopPermissionStatuses,
   decodeDesktopAudioGraph,
   decodeDesktopDeviceList,
   decodeDesktopDisplayList,
@@ -33,6 +34,23 @@ test("desktop agent request protocol round-trips", () => {
   };
   const line = encodeDesktopAgentRequest(request).trim();
   assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(line)), request);
+});
+
+test("desktop agent accepts the read-only permission status method", () => {
+  const request: DesktopAgentRequest = {
+    requestId: "request-permissions",
+    protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
+    authToken: "a".repeat(64),
+    method: "desktop.permissions",
+    params: {},
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
+  const permissions = decodeDesktopPermissionStatuses([
+    { id: "windows", granted: true, defaultGranted: true },
+    { id: "screen", granted: false, defaultGranted: false },
+  ]);
+  assert.equal(permissions[0]?.granted, true);
+  assert.equal(permissions[1]?.defaultGranted, false);
 });
 
 test("desktop agent accepts the read-only windows list method", () => {

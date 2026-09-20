@@ -27,6 +27,11 @@ assert.equal(loadConfig(baseEnv).devspaceAgentsDir, join(emptyConfigDir, "agents
 assert.deepEqual(loadConfig(baseEnv).subagents, { enabled: false, providers: [] });
 assert.equal(loadConfig(baseEnv).artifactsEnabled, false);
 assert.equal(loadConfig(baseEnv).artifactMaxFileBytes, 100 * 1024 * 1024);
+assert.equal(loadConfig(baseEnv).desktopPermissions.windows, true);
+assert.equal(loadConfig(baseEnv).desktopPermissions.notifications, true);
+assert.equal(loadConfig(baseEnv).desktopPermissions.screen, false);
+assert.equal(loadConfig(baseEnv).desktopPermissions.input, false);
+assert.equal(loadConfig(baseEnv).desktopPermissions["clipboard-read"], false);
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_ARTIFACTS: "1" }).artifactsEnabled, true);
 assert.equal(
   loadConfig({ ...baseEnv, DEVSPACE_ARTIFACT_MAX_FILE_BYTES: "123" }).artifactMaxFileBytes,
@@ -164,6 +169,11 @@ writeFileSync(
     subagents: true,
     artifactsEnabled: true,
     artifactMaxFileBytes: 321,
+    desktopPermissions: {
+      windows: false,
+      notifications: false,
+      screen: true,
+    },
   }),
 );
 writeFileSync(
@@ -181,6 +191,10 @@ assert.equal(fileConfig.subagents.enabled, true);
 assert.equal(fileConfig.subagents.providers.length, 7);
 assert.equal(fileConfig.artifactsEnabled, true);
 assert.equal(fileConfig.artifactMaxFileBytes, 321);
+assert.equal(fileConfig.desktopPermissions.windows, false);
+assert.equal(fileConfig.desktopPermissions.notifications, false);
+assert.equal(fileConfig.desktopPermissions.screen, true);
+assert.equal(fileConfig.desktopPermissions.audio, true);
 assert.deepEqual(fileConfig.allowedHosts, [
   "localhost",
   "127.0.0.1",

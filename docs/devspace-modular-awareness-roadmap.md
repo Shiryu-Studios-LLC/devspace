@@ -46,7 +46,7 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [ ] Add protocol version negotiation beyond strict version validation.
 - [x] Add capability discovery.
 - [ ] Add reconnect/backoff behavior for mid-request agent loss.
-- [ ] Add per-capability permissions.
+- [x] Add per-capability permissions with read-only status reporting; existing awareness modules default granted while screen/input/accessibility/clipboard/actions/filesystem-watch/browser default denied.
 - [x] Add health reporting and a kill switch.
 - [x] Ensure agent failure never terminates DevSpace core.
 - [x] Launch Linux desktop agent through the user systemd manager so it inherits the active KDE graphical-session environment while core remains detached.

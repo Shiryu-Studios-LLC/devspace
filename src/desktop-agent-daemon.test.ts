@@ -7,6 +7,7 @@ import test from "node:test";
 import { DesktopActivityMonitor } from "./desktop-activity-monitor.js";
 import { DesktopAgentClient } from "./desktop-agent-client.js";
 import { DesktopAgentDaemon } from "./desktop-agent-daemon.js";
+import { defaultDesktopPermissionPolicy } from "./desktop-permissions.js";
 import {
   DESKTOP_AGENT_PROTOCOL_VERSION,
   desktopAgentPaths,
@@ -49,6 +50,10 @@ test("desktop agent serves authenticated status and capability requests", async 
   const capabilities = await client.capabilities();
   assert.equal(capabilities.length, 12);
   assert.ok(capabilities.every((capability) => capability.state === "not_implemented"));
+  const permissions = await client.permissions();
+  assert.equal(permissions.length, 19);
+  assert.equal(permissions.find((permission) => permission.id === "windows")?.granted, true);
+  assert.equal(permissions.find((permission) => permission.id === "screen")?.granted, false);
 
   const unauthorized = await sendRaw(started.endpoint, encodeDesktopAgentRequest({
     requestId: "bad-auth",
@@ -59,6 +64,41 @@ test("desktop agent serves authenticated status and capability requests", async 
   }));
   assert.equal(unauthorized.ok, false);
   if (!unauthorized.ok) assert.equal(unauthorized.error.code, "DESKTOP_AGENT_UNAUTHORIZED");
+});
+
+test("desktop agent enforces denied permissions before providers run", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-permissions-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const permissions = defaultDesktopPermissionPolicy();
+  permissions.windows = false;
+  let windowsCalls = 0;
+  const daemon = new DesktopAgentDaemon({
+    stateDir,
+    permissions,
+    capabilities: () => [{ id: "windows", state: "ready" }],
+    windows: async () => {
+      windowsCalls += 1;
+      return [];
+    },
+  });
+  t.after(() => daemon.close());
+  await daemon.start();
+  const client = new DesktopAgentClient({
+    stateDir,
+    spawnDaemon: () => assert.fail("existing daemon should not be respawned"),
+  });
+
+  await assert.rejects(
+    () => client.windows(),
+    (error: unknown) => Boolean(
+      error
+      && typeof error === "object"
+      && "code" in error
+      && (error as { code?: unknown }).code === "DESKTOP_PERMISSION_DENIED"
+    ),
+  );
+  assert.equal(windowsCalls, 0, "denied providers must not run");
+  assert.equal((await client.permissions()).find((permission) => permission.id === "windows")?.granted, false);
 });
 
 test("desktop agent serves a structured read-only window inventory", async (t) => {

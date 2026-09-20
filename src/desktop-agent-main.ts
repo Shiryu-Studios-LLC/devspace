@@ -14,6 +14,7 @@ const paths = desktopAgentPaths(config.stateDir);
 let shuttingDown = false;
 const daemon = new DesktopAgentDaemon({
   stateDir: config.stateDir,
+  permissions: config.desktopPermissions,
   onClosed: () => {
     if (!shuttingDown) process.exit(0);
   },

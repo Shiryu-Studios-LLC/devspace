@@ -10,6 +10,10 @@ import {
   type UpstreamMcpServerConfig,
 } from "./user-config.js";
 import { resolveSubagentsConfig, type SubagentsConfig } from "./local-agent-config.js";
+import {
+  resolveDesktopPermissionPolicy,
+  type DesktopPermissionPolicy,
+} from "./desktop-permissions.js";
 
 export type ToolMode = "minimal" | "full" | "codex";
 export type WidgetMode = "off" | "changes" | "full";
@@ -43,6 +47,7 @@ export interface ServerConfig {
   agentDir: string;
   logging: LoggingConfig;
   upstreamMcpServers: UpstreamMcpServerConfig[];
+  desktopPermissions: DesktopPermissionPolicy;
 }
 
 function parsePort(value: string | number | undefined): number {
@@ -264,6 +269,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     agentDir: resolve(expandHomePath(env.DEVSPACE_AGENT_DIR ?? files.config.agentDir ?? defaultAgentDir())),
     logging: parseLoggingConfig(env),
     upstreamMcpServers: files.config.upstreamMcpServers ?? DEFAULT_UPSTREAM_MCP_SERVERS,
+    desktopPermissions: resolveDesktopPermissionPolicy(files.config.desktopPermissions),
   };
 }
 

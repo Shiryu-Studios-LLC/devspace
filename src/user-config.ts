@@ -9,6 +9,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { expandHomePath } from "./roots.js";
 import type { StoredSubagentsConfig } from "./local-agent-config.js";
+import type { StoredDesktopPermissionPolicy } from "./desktop-permissions.js";
 
 export interface UpstreamMcpServerConfig {
   name: string;
@@ -29,6 +30,7 @@ export interface DevspaceUserConfig {
   agentDir?: string;
   subagents?: StoredSubagentsConfig;
   upstreamMcpServers?: UpstreamMcpServerConfig[];
+  desktopPermissions?: StoredDesktopPermissionPolicy;
 }
 
 export interface DevspaceAuthConfig {

@@ -11,6 +11,7 @@ import type {
   DesktopAgentStatus,
   DesktopAudioGraph,
   DesktopCapabilityStatus,
+  DesktopPermissionStatus,
   DesktopDeviceInfo,
   DesktopDisplayInfo,
   DesktopNetworkSnapshot,
@@ -87,6 +88,40 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
         return {
           content: [{ type: "text" as const, text: result }],
           structuredContent: { status: "ready" as const, result, capabilities },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "desktop_agent_permissions",
+    {
+      title: "Desktop Agent Permissions",
+      description:
+        "Start the isolated desktop agent if needed and report its effective per-capability permission policy. This is read-only and does not change permissions.",
+      inputSchema: {},
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        permissions: z.array(z.object({
+          id: z.string(),
+          granted: z.boolean(),
+          defaultGranted: z.boolean(),
+        })).optional(),
+      },
+      _meta: {},
+      annotations: readAnnotations,
+    },
+    async () => {
+      try {
+        const permissions = await client.permissions();
+        const result = formatPermissions(permissions);
+        return {
+          content: [{ type: "text" as const, text: result }],
+          structuredContent: { status: "ready" as const, result, permissions },
         };
       } catch (error) {
         return clientErrorResponse(error);
@@ -874,6 +909,12 @@ function formatNetworkSummary(network: DesktopNetworkSnapshot): string {
   const upInterfaces = network.interfaces.filter((networkInterface) => networkInterface.up && !networkInterface.loopback);
   const addressed = upInterfaces.filter((networkInterface) => networkInterface.addresses.length > 0);
   return `Network snapshot: ${network.interfaces.length} interface(s), ${addressed.length} active/addressed, ${network.routes.length} route(s), ${network.dnsServers.length} DNS server(s), ${network.listeners.length} listening socket(s), Cloudflare Tunnel ${network.cloudflareTunnel.running ? "running" : "not running"}.`;
+}
+
+function formatPermissions(permissions: DesktopPermissionStatus[]): string {
+  const granted = permissions.filter((permission) => permission.granted).length;
+  const denied = permissions.length - granted;
+  return `Desktop permission policy: ${granted} granted, ${denied} denied, ${permissions.length} total.`;
 }
 
 function formatDeviceSummary(devices: DesktopDeviceInfo[]): string {

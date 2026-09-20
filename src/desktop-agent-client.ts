@@ -14,6 +14,7 @@ import {
   decodeDesktopAgentResponse,
   decodeDesktopAudioGraph,
   decodeDesktopAgentStatus,
+  decodeDesktopPermissionStatuses,
   decodeDesktopDeviceList,
   decodeDesktopDisplayList,
   decodeDesktopNetworkSnapshot,
@@ -32,6 +33,7 @@ import {
   type DesktopAgentResponse,
   type DesktopAgentStatus,
   type DesktopCapabilityStatus,
+  type DesktopPermissionStatus,
   type DesktopDeviceInfo,
   type DesktopDisplayInfo,
   type DesktopNetworkSnapshot,
@@ -104,6 +106,11 @@ export class DesktopAgentClient {
       throw new DesktopAgentClientError("DESKTOP_AGENT_INVALID_RESPONSE", "Desktop agent returned invalid capabilities.");
     }
     return result.map((item) => decodeCapability(item));
+  }
+
+  async permissions(): Promise<DesktopPermissionStatus[]> {
+    await this.ensureReady();
+    return decodeDesktopPermissionStatuses(await this.requestExisting("desktop.permissions"));
   }
 
   async windows(): Promise<DesktopWindowInfo[]> {

@@ -1,6 +1,14 @@
 import { timingSafeEqual } from "node:crypto";
 import { DesktopActivityMonitor } from "./desktop-activity-monitor.js";
 import {
+  DESKTOP_PERMISSION_IDS,
+  defaultDesktopPermissionPolicy,
+  desktopPermissionDefaultGranted,
+  desktopPermissionGranted,
+  type DesktopPermissionId,
+  type DesktopPermissionPolicy,
+} from "./desktop-permissions.js";
+import {
   getPipeWireAudioGraph,
   pipeWireAudioAwarenessAvailable,
 } from "./desktop-audio-pipewire.js";
@@ -51,6 +59,7 @@ import {
   type DesktopDisplayInfo,
   type DesktopNetworkSnapshot,
   type DesktopVirtualDesktopSnapshot,
+  type DesktopPermissionStatus,
   type DesktopNotificationInfo,
   type DesktopLogReadResult,
   type DesktopLogSource,
@@ -78,6 +87,7 @@ export interface DesktopAgentDaemonOptions {
   stateDir: string;
   paths?: DesktopAgentPaths;
   capabilities?: () => DesktopCapabilityStatus[];
+  permissions?: DesktopPermissionPolicy;
   windows?: () => Promise<DesktopWindowInfo[]>;
   displays?: () => Promise<DesktopDisplayInfo[]>;
   processes?: () => Promise<DesktopProcessInfo[]>;
@@ -98,6 +108,7 @@ export interface DesktopAgentDaemonOptions {
 export class DesktopAgentDaemon {
   readonly paths: DesktopAgentPaths;
   private readonly lock: DesktopAgentLock;
+  private readonly permissionPolicy: DesktopPermissionPolicy;
   private readonly capabilitiesProvider: () => DesktopCapabilityStatus[];
   private readonly windowsProvider: () => Promise<DesktopWindowInfo[]>;
   private readonly displaysProvider: () => Promise<DesktopDisplayInfo[]>;
@@ -125,10 +136,11 @@ export class DesktopAgentDaemon {
   constructor(options: DesktopAgentDaemonOptions) {
     this.paths = options.paths ?? desktopAgentPaths(options.stateDir);
     this.lock = new DesktopAgentLock(this.paths);
-    this.capabilitiesProvider = options.capabilities ?? defaultDesktopCapabilities;
+    this.permissionPolicy = options.permissions ?? defaultDesktopPermissionPolicy();
+    this.capabilitiesProvider = options.capabilities ?? (() => defaultDesktopCapabilities(this.permissionPolicy));
     this.windowsProvider = options.windows ?? listKdeWindows;
     this.displaysProvider = options.displays ?? listKdeDisplays;
-    this.processesProvider = options.processes ?? defaultProcessInventory;
+    this.processesProvider = options.processes ?? (() => defaultProcessInventory(desktopPermissionGranted(this.permissionPolicy, "windows")));
     this.audioGraphProvider = options.audioGraph ?? getPipeWireAudioGraph;
     this.devicesProvider = options.devices ?? listLinuxDevices;
     this.networkSnapshotProvider = options.networkSnapshot ?? getLinuxNetworkSnapshot;
@@ -139,14 +151,26 @@ export class DesktopAgentDaemon {
     this.notificationMonitor = options.notificationMonitor ?? (options.notifications ? undefined : new LinuxNotificationMonitor({ now: options.now }));
     this.notificationsProvider = options.notifications ?? (() => Promise.resolve(this.notificationMonitor?.recent() ?? []));
     this.activityMonitor = options.activityMonitor ?? new DesktopActivityMonitor({
-      windows: this.windowsProvider,
-      displays: this.displaysProvider,
-      processes: options.processes ?? (() => listLinuxProcesses([])),
-      audio: options.audioGraph ?? (pipeWireAudioAwarenessAvailable() ? this.audioGraphProvider : undefined),
-      devices: options.devices ?? (linuxDeviceAwarenessAvailable() ? this.devicesProvider : undefined),
-      network: options.networkSnapshot ?? (linuxNetworkAwarenessAvailable() ? this.networkSnapshotProvider : undefined),
-      notifications: options.notifications ?? (linuxNotificationAwarenessAvailable() ? this.notificationsProvider : undefined),
-      virtualDesktops: options.virtualDesktops ?? (kdeVirtualDesktopAwarenessAvailable() ? this.virtualDesktopsProvider : undefined),
+      windows: desktopPermissionGranted(this.permissionPolicy, "windows") ? this.windowsProvider : async () => [],
+      displays: desktopPermissionGranted(this.permissionPolicy, "displays") ? this.displaysProvider : async () => [],
+      processes: desktopPermissionGranted(this.permissionPolicy, "processes")
+        ? (options.processes ?? (() => listLinuxProcesses([])))
+        : async () => [],
+      audio: desktopPermissionGranted(this.permissionPolicy, "audio")
+        ? (options.audioGraph ?? (pipeWireAudioAwarenessAvailable() ? this.audioGraphProvider : undefined))
+        : undefined,
+      devices: desktopPermissionGranted(this.permissionPolicy, "devices")
+        ? (options.devices ?? (linuxDeviceAwarenessAvailable() ? this.devicesProvider : undefined))
+        : undefined,
+      network: desktopPermissionGranted(this.permissionPolicy, "network")
+        ? (options.networkSnapshot ?? (linuxNetworkAwarenessAvailable() ? this.networkSnapshotProvider : undefined))
+        : undefined,
+      notifications: desktopPermissionGranted(this.permissionPolicy, "notifications")
+        ? (options.notifications ?? (linuxNotificationAwarenessAvailable() ? this.notificationsProvider : undefined))
+        : undefined,
+      virtualDesktops: desktopPermissionGranted(this.permissionPolicy, "virtual-desktops")
+        ? (options.virtualDesktops ?? (kdeVirtualDesktopAwarenessAvailable() ? this.virtualDesktopsProvider : undefined))
+        : undefined,
       now: options.now,
     });
     this.now = options.now ?? Date.now;
@@ -313,6 +337,13 @@ export class DesktopAgentDaemon {
     if (this.stopping && request.method !== "hello" && request.method !== "desktop.status") {
       throw new DesktopAgentProtocolError("DESKTOP_AGENT_STOPPING", "Desktop agent is stopping.");
     }
+    const requiredPermission = permissionForDesktopMethod(request.method);
+    if (requiredPermission && !desktopPermissionGranted(this.permissionPolicy, requiredPermission)) {
+      throw new DesktopAgentProtocolError(
+        "DESKTOP_PERMISSION_DENIED",
+        `Desktop permission is denied: ${requiredPermission}.`,
+      );
+    }
 
     switch (request.method) {
       case "hello":
@@ -320,6 +351,8 @@ export class DesktopAgentDaemon {
         return this.status();
       case "desktop.capabilities":
         return this.capabilitiesProvider();
+      case "desktop.permissions":
+        return desktopPermissionStatuses(this.permissionPolicy);
       case "windows.list": {
         const windowsCapability = this.capabilitiesProvider().find((capability) => capability.id === "windows");
         if (windowsCapability?.state !== "ready") {
@@ -493,7 +526,9 @@ export class DesktopAgentDaemon {
   }
 }
 
-export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
+export function defaultDesktopCapabilities(
+  permissions: DesktopPermissionPolicy = defaultDesktopPermissionPolicy(),
+): DesktopCapabilityStatus[] {
   const windowsReady = kdeWindowAwarenessAvailable();
   const displaysReady = kdeDisplayAwarenessAvailable();
   const processesReady = linuxProcessAwarenessAvailable();
@@ -503,52 +538,115 @@ export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
   const logsReady = linuxLogAwarenessAvailable();
   const notificationsReady = linuxNotificationAwarenessAvailable();
   const virtualDesktopsReady = kdeVirtualDesktopAwarenessAvailable();
-  const eventsReady = windowsReady || displaysReady || processesReady || audioReady || devicesReady || networkReady || notificationsReady || virtualDesktopsReady;
-  const tracingReady = logsReady && eventsReady;
+  const eventsSourceReady = (
+    (desktopPermissionGranted(permissions, "windows") && windowsReady)
+    || (desktopPermissionGranted(permissions, "displays") && displaysReady)
+    || (desktopPermissionGranted(permissions, "processes") && processesReady)
+    || (desktopPermissionGranted(permissions, "audio") && audioReady)
+    || (desktopPermissionGranted(permissions, "devices") && devicesReady)
+    || (desktopPermissionGranted(permissions, "network") && networkReady)
+    || (desktopPermissionGranted(permissions, "notifications") && notificationsReady)
+    || (desktopPermissionGranted(permissions, "virtual-desktops") && virtualDesktopsReady)
+  );
+  const eventsReady = desktopPermissionGranted(permissions, "events") && eventsSourceReady;
+  const tracingReady = desktopPermissionGranted(permissions, "tracing")
+    && desktopPermissionGranted(permissions, "logs")
+    && logsReady
+    && eventsReady;
   return [
-    windowsReady
-      ? { id: "windows", state: "ready", detail: "KDE/KWin D-Bus window inventory" }
-      : { id: "windows", state: "unavailable", detail: "KDE/KWin graphical session is unavailable" },
-    displaysReady
-      ? { id: "displays", state: "ready", detail: "KDE KScreen display inventory" }
-      : { id: "displays", state: "unavailable", detail: "KDE KScreen graphical session is unavailable" },
-    processesReady
-      ? { id: "processes", state: "ready", detail: "Linux /proc process inventory without command-line arguments or environment data" }
-      : { id: "processes", state: "unavailable", detail: "Linux /proc is unavailable" },
-    { id: "screen", state: "not_implemented" },
-    { id: "input", state: "not_implemented" },
-    { id: "accessibility", state: "not_implemented" },
-    { id: "clipboard", state: "not_implemented" },
-    notificationsReady
-      ? { id: "notifications", state: "ready", detail: "Read-only bounded in-memory observation of freedesktop notifications delivered through Plasma" }
-      : { id: "notifications", state: "unavailable", detail: "Plasma notification D-Bus service is unavailable" },
-    audioReady
-      ? { id: "audio", state: "ready", detail: "Read-only PipeWire audio nodes, ports, and routing links" }
-      : { id: "audio", state: "unavailable", detail: "PipeWire user-session graph is unavailable" },
-    devicesReady
-      ? { id: "devices", state: "ready", detail: "Read-only Linux USB, PCI, block-storage, and Bluetooth inventory without serial numbers or Bluetooth addresses" }
-      : { id: "devices", state: "unavailable", detail: "Linux hardware inventory sources are unavailable" },
-    networkReady
-      ? { id: "network", state: "ready", detail: "Read-only Linux interfaces, routes, DNS servers, listening sockets, and Cloudflare Tunnel process state" }
-      : { id: "network", state: "unavailable", detail: "Linux iproute2 network inventory is unavailable" },
-    virtualDesktopsReady
-      ? { id: "virtual-desktops", state: "ready", detail: "Read-only KDE virtual desktop list and current desktop state" }
-      : { id: "virtual-desktops", state: "unavailable", detail: "KDE virtual desktop manager is unavailable" },
-    logsReady
-      ? { id: "logs", state: "ready", detail: "Explicit-source bounded reads from the Linux user journal; no arbitrary filesystem paths" }
-      : { id: "logs", state: "unavailable", detail: "Linux user journal is unavailable" },
-    tracingReady
-      ? { id: "tracing", state: "ready", detail: "Correlates bounded activity timeline entries with recent user-journal messages for pid:<pid> correlation IDs" }
-      : { id: "tracing", state: "unavailable", detail: "Tracing requires both activity events and Linux user-journal access" },
-    eventsReady
-      ? { id: "events", state: "ready", detail: "Bounded in-memory process/window/display/audio/device/network/notification/virtual-desktop activity timeline" }
-      : { id: "events", state: "unavailable", detail: "No activity sources are available" },
+    permissionAwareCapability(permissions, "windows", windowsReady,
+      "KDE/KWin D-Bus window inventory", "KDE/KWin graphical session is unavailable"),
+    permissionAwareCapability(permissions, "displays", displaysReady,
+      "KDE KScreen display inventory", "KDE KScreen graphical session is unavailable"),
+    permissionAwareCapability(permissions, "processes", processesReady,
+      "Linux /proc process inventory without command-line arguments or environment data", "Linux /proc is unavailable"),
+    desktopPermissionGranted(permissions, "screen")
+      ? { id: "screen", state: "not_implemented" }
+      : disabledCapability("screen"),
+    desktopPermissionGranted(permissions, "input")
+      ? { id: "input", state: "not_implemented" }
+      : disabledCapability("input"),
+    desktopPermissionGranted(permissions, "accessibility")
+      ? { id: "accessibility", state: "not_implemented" }
+      : disabledCapability("accessibility"),
+    (desktopPermissionGranted(permissions, "clipboard-read") || desktopPermissionGranted(permissions, "clipboard-write"))
+      ? { id: "clipboard", state: "not_implemented" }
+      : disabledCapability("clipboard"),
+    permissionAwareCapability(permissions, "notifications", notificationsReady,
+      "Read-only bounded in-memory observation of freedesktop notifications delivered through Plasma",
+      "Plasma notification D-Bus service is unavailable"),
+    permissionAwareCapability(permissions, "audio", audioReady,
+      "Read-only PipeWire audio nodes, ports, and routing links", "PipeWire user-session graph is unavailable"),
+    permissionAwareCapability(permissions, "devices", devicesReady,
+      "Read-only Linux USB, PCI, block-storage, and Bluetooth inventory without serial numbers or Bluetooth addresses",
+      "Linux hardware inventory sources are unavailable"),
+    permissionAwareCapability(permissions, "network", networkReady,
+      "Read-only Linux interfaces, routes, DNS servers, listening sockets, and Cloudflare Tunnel process state",
+      "Linux iproute2 network inventory is unavailable"),
+    permissionAwareCapability(permissions, "virtual-desktops", virtualDesktopsReady,
+      "Read-only KDE virtual desktop list and current desktop state", "KDE virtual desktop manager is unavailable"),
+    permissionAwareCapability(permissions, "logs", logsReady,
+      "Explicit-source bounded reads from the Linux user journal; no arbitrary filesystem paths",
+      "Linux user journal is unavailable"),
+    !desktopPermissionGranted(permissions, "tracing")
+      ? disabledCapability("tracing")
+      : tracingReady
+        ? { id: "tracing", state: "ready", detail: "Correlates bounded activity timeline entries with recent user-journal messages for pid:<pid> correlation IDs" }
+        : { id: "tracing", state: "unavailable", detail: "Tracing requires permitted activity events and Linux user-journal access" },
+    !desktopPermissionGranted(permissions, "events")
+      ? disabledCapability("events")
+      : eventsReady
+        ? { id: "events", state: "ready", detail: "Bounded in-memory process/window/display/audio/device/network/notification/virtual-desktop activity timeline" }
+        : { id: "events", state: "unavailable", detail: "No permitted activity sources are available" },
   ];
 }
 
-async function defaultProcessInventory(): Promise<DesktopProcessInfo[]> {
+function permissionForDesktopMethod(method: DesktopAgentRequest["method"]): DesktopPermissionId | undefined {
+  switch (method) {
+    case "windows.list": return "windows";
+    case "displays.list": return "displays";
+    case "processes.list": return "processes";
+    case "events.recent": return "events";
+    case "audio.graph": return "audio";
+    case "devices.list": return "devices";
+    case "network.snapshot": return "network";
+    case "virtual-desktops.snapshot": return "virtual-desktops";
+    case "logs.sources":
+    case "logs.read": return "logs";
+    case "notifications.recent": return "notifications";
+    case "trace.correlate": return "tracing";
+    default: return undefined;
+  }
+}
+
+function desktopPermissionStatuses(policy: DesktopPermissionPolicy): DesktopPermissionStatus[] {
+  return DESKTOP_PERMISSION_IDS.map((id) => ({
+    id,
+    granted: desktopPermissionGranted(policy, id),
+    defaultGranted: desktopPermissionDefaultGranted(id),
+  }));
+}
+
+function permissionAwareCapability(
+  permissions: DesktopPermissionPolicy,
+  permissionId: DesktopPermissionId,
+  available: boolean,
+  readyDetail: string,
+  unavailableDetail: string,
+): DesktopCapabilityStatus {
+  if (!desktopPermissionGranted(permissions, permissionId)) return disabledCapability(permissionId);
+  return available
+    ? { id: permissionId, state: "ready", detail: readyDetail }
+    : { id: permissionId, state: "unavailable", detail: unavailableDetail };
+}
+
+function disabledCapability(id: string): DesktopCapabilityStatus {
+  return { id, state: "disabled", detail: "Disabled by desktop permission policy" };
+}
+
+async function defaultProcessInventory(includeWindows = true): Promise<DesktopProcessInfo[]> {
   let windows: DesktopWindowInfo[] = [];
-  if (kdeWindowAwarenessAvailable()) {
+  if (includeWindows && kdeWindowAwarenessAvailable()) {
     try {
       windows = await listKdeWindows();
     } catch {

@@ -203,6 +203,7 @@ test("module status keeps core health separate from secondary modules", async (t
   for (const name of [
     "desktop_agent_status",
     "desktop_agent_capabilities",
+    "desktop_agent_permissions",
     "desktop_list_windows",
     "desktop_list_displays",
     "desktop_list_processes",
