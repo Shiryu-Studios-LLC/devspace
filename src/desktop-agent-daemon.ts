@@ -13,6 +13,10 @@ import {
   linuxNetworkAwarenessAvailable,
 } from "./desktop-network-linux.js";
 import {
+  getKdeVirtualDesktopSnapshot,
+  kdeVirtualDesktopAwarenessAvailable,
+} from "./desktop-virtual-desktops-kde.js";
+import {
   linuxLogAwarenessAvailable,
   listLinuxLogSources,
   readLinuxLogs,
@@ -46,6 +50,7 @@ import {
   type DesktopDeviceInfo,
   type DesktopDisplayInfo,
   type DesktopNetworkSnapshot,
+  type DesktopVirtualDesktopSnapshot,
   type DesktopNotificationInfo,
   type DesktopLogReadResult,
   type DesktopLogSource,
@@ -79,6 +84,7 @@ export interface DesktopAgentDaemonOptions {
   audioGraph?: () => Promise<DesktopAudioGraph>;
   devices?: () => Promise<DesktopDeviceInfo[]>;
   networkSnapshot?: () => Promise<DesktopNetworkSnapshot>;
+  virtualDesktops?: () => Promise<DesktopVirtualDesktopSnapshot>;
   logSources?: () => Promise<DesktopLogSource[]>;
   readLogs?: (sourceId: string, options?: { lines?: number; query?: string }) => Promise<DesktopLogReadResult>;
   readLogsForPid?: (pid: number, options?: { lines?: number; query?: string }) => Promise<DesktopLogReadResult>;
@@ -99,6 +105,7 @@ export class DesktopAgentDaemon {
   private readonly audioGraphProvider: () => Promise<DesktopAudioGraph>;
   private readonly devicesProvider: () => Promise<DesktopDeviceInfo[]>;
   private readonly networkSnapshotProvider: () => Promise<DesktopNetworkSnapshot>;
+  private readonly virtualDesktopsProvider: () => Promise<DesktopVirtualDesktopSnapshot>;
   private readonly logSourcesProvider: () => Promise<DesktopLogSource[]>;
   private readonly readLogsProvider: (sourceId: string, options?: { lines?: number; query?: string }) => Promise<DesktopLogReadResult>;
   private readonly readLogsForPidProvider: (pid: number, options?: { lines?: number; query?: string }) => Promise<DesktopLogReadResult>;
@@ -125,6 +132,7 @@ export class DesktopAgentDaemon {
     this.audioGraphProvider = options.audioGraph ?? getPipeWireAudioGraph;
     this.devicesProvider = options.devices ?? listLinuxDevices;
     this.networkSnapshotProvider = options.networkSnapshot ?? getLinuxNetworkSnapshot;
+    this.virtualDesktopsProvider = options.virtualDesktops ?? getKdeVirtualDesktopSnapshot;
     this.logSourcesProvider = options.logSources ?? listLinuxLogSources;
     this.readLogsProvider = options.readLogs ?? readLinuxLogs;
     this.readLogsForPidProvider = options.readLogsForPid ?? readLinuxLogsForPid;
@@ -138,6 +146,7 @@ export class DesktopAgentDaemon {
       devices: options.devices ?? (linuxDeviceAwarenessAvailable() ? this.devicesProvider : undefined),
       network: options.networkSnapshot ?? (linuxNetworkAwarenessAvailable() ? this.networkSnapshotProvider : undefined),
       notifications: options.notifications ?? (linuxNotificationAwarenessAvailable() ? this.notificationsProvider : undefined),
+      virtualDesktops: options.virtualDesktops ?? (kdeVirtualDesktopAwarenessAvailable() ? this.virtualDesktopsProvider : undefined),
       now: options.now,
     });
     this.now = options.now ?? Date.now;
@@ -384,6 +393,16 @@ export class DesktopAgentDaemon {
         }
         return this.networkSnapshotProvider();
       }
+      case "virtual-desktops.snapshot": {
+        const capability = this.capabilitiesProvider().find((item) => item.id === "virtual-desktops");
+        if (capability?.state !== "ready") {
+          throw new DesktopAgentProtocolError(
+            "DESKTOP_VIRTUAL_DESKTOPS_UNAVAILABLE",
+            capability?.detail ?? "Virtual desktop awareness is unavailable.",
+          );
+        }
+        return this.virtualDesktopsProvider();
+      }
       case "logs.sources": {
         const logsCapability = this.capabilitiesProvider().find((capability) => capability.id === "logs");
         if (logsCapability?.state !== "ready") {
@@ -483,7 +502,8 @@ export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
   const networkReady = linuxNetworkAwarenessAvailable();
   const logsReady = linuxLogAwarenessAvailable();
   const notificationsReady = linuxNotificationAwarenessAvailable();
-  const eventsReady = windowsReady || displaysReady || processesReady || audioReady || devicesReady || networkReady || notificationsReady;
+  const virtualDesktopsReady = kdeVirtualDesktopAwarenessAvailable();
+  const eventsReady = windowsReady || displaysReady || processesReady || audioReady || devicesReady || networkReady || notificationsReady || virtualDesktopsReady;
   const tracingReady = logsReady && eventsReady;
   return [
     windowsReady
@@ -511,6 +531,9 @@ export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
     networkReady
       ? { id: "network", state: "ready", detail: "Read-only Linux interfaces, routes, DNS servers, listening sockets, and Cloudflare Tunnel process state" }
       : { id: "network", state: "unavailable", detail: "Linux iproute2 network inventory is unavailable" },
+    virtualDesktopsReady
+      ? { id: "virtual-desktops", state: "ready", detail: "Read-only KDE virtual desktop list and current desktop state" }
+      : { id: "virtual-desktops", state: "unavailable", detail: "KDE virtual desktop manager is unavailable" },
     logsReady
       ? { id: "logs", state: "ready", detail: "Explicit-source bounded reads from the Linux user journal; no arbitrary filesystem paths" }
       : { id: "logs", state: "unavailable", detail: "Linux user journal is unavailable" },
@@ -518,7 +541,7 @@ export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
       ? { id: "tracing", state: "ready", detail: "Correlates bounded activity timeline entries with recent user-journal messages for pid:<pid> correlation IDs" }
       : { id: "tracing", state: "unavailable", detail: "Tracing requires both activity events and Linux user-journal access" },
     eventsReady
-      ? { id: "events", state: "ready", detail: "Bounded in-memory process/window/display/audio/device/network/notification activity timeline" }
+      ? { id: "events", state: "ready", detail: "Bounded in-memory process/window/display/audio/device/network/notification/virtual-desktop activity timeline" }
       : { id: "events", state: "unavailable", detail: "No activity sources are available" },
   ];
 }

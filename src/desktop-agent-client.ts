@@ -17,6 +17,7 @@ import {
   decodeDesktopDeviceList,
   decodeDesktopDisplayList,
   decodeDesktopNetworkSnapshot,
+  decodeDesktopVirtualDesktopSnapshot,
   decodeDesktopNotificationList,
   decodeDesktopLogReadResult,
   decodeDesktopLogSources,
@@ -34,6 +35,7 @@ import {
   type DesktopDeviceInfo,
   type DesktopDisplayInfo,
   type DesktopNetworkSnapshot,
+  type DesktopVirtualDesktopSnapshot,
   type DesktopNotificationInfo,
   type DesktopLogReadResult,
   type DesktopLogSource,
@@ -137,6 +139,11 @@ export class DesktopAgentClient {
   async networkSnapshot(): Promise<DesktopNetworkSnapshot> {
     await this.ensureReady();
     return decodeDesktopNetworkSnapshot(await this.requestExisting("network.snapshot"));
+  }
+
+  async virtualDesktops(): Promise<DesktopVirtualDesktopSnapshot> {
+    await this.ensureReady();
+    return decodeDesktopVirtualDesktopSnapshot(await this.requestExisting("virtual-desktops.snapshot"));
   }
 
   async logSources(): Promise<DesktopLogSource[]> {

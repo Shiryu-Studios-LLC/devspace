@@ -7,6 +7,7 @@ import type {
   DesktopDisplayInfo,
   DesktopNetworkSnapshot,
   DesktopNotificationInfo,
+  DesktopVirtualDesktopSnapshot,
   DesktopProcessInfo,
   DesktopWindowInfo,
 } from "./desktop-agent-protocol.js";
@@ -173,6 +174,56 @@ test("desktop activity monitor records notification creation and closure", async
   }];
   await monitor.sample();
   assert.deepEqual(monitor.recent(2).map((event) => event.type), ["notification.created", "notification.closed"]);
+});
+
+test("desktop activity monitor records virtual desktop creation, removal, metadata, and current changes", async () => {
+  let virtualDesktops: DesktopVirtualDesktopSnapshot = {
+    generatedAt: "2026-09-20T06:50:00.000Z",
+    currentId: "desktop-1",
+    count: 1,
+    rows: 1,
+    navigationWrappingAround: false,
+    desktops: [{ position: 0, id: "desktop-1", name: "Main", current: true }],
+  };
+  const monitor = new DesktopActivityMonitor({
+    windows: async () => [],
+    processes: async () => [],
+    displays: async () => [],
+    virtualDesktops: async () => virtualDesktops,
+  });
+
+  await monitor.sample();
+  assert.equal(monitor.cursor(), 0);
+
+  virtualDesktops = {
+    generatedAt: "2026-09-20T06:50:01.000Z",
+    currentId: "desktop-2",
+    count: 2,
+    rows: 1,
+    navigationWrappingAround: false,
+    desktops: [
+      { position: 0, id: "desktop-1", name: "Work", current: false },
+      { position: 1, id: "desktop-2", name: "VR", current: true },
+    ],
+  };
+  await monitor.sample();
+  assert.deepEqual(monitor.recent().map((event) => event.type), [
+    "virtual-desktop.changed",
+    "virtual-desktop.created",
+    "virtual-desktop.current.changed",
+  ]);
+  assert.equal(monitor.recent().at(-1)?.correlationId, "virtual-desktop:desktop-2");
+
+  virtualDesktops = {
+    generatedAt: "2026-09-20T06:50:02.000Z",
+    currentId: "desktop-2",
+    count: 1,
+    rows: 1,
+    navigationWrappingAround: false,
+    desktops: [{ position: 0, id: "desktop-2", name: "VR", current: true }],
+  };
+  await monitor.sample();
+  assert.equal(monitor.recent().at(-1)?.type, "virtual-desktop.removed");
 });
 
 test("desktop activity monitor records device connection, disconnection, and metadata changes", async () => {

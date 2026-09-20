@@ -14,6 +14,7 @@ import type {
   DesktopDeviceInfo,
   DesktopDisplayInfo,
   DesktopNetworkSnapshot,
+  DesktopVirtualDesktopSnapshot,
   DesktopNotificationInfo,
   DesktopLogReadResult,
   DesktopLogSource,
@@ -270,7 +271,7 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
     {
       title: "Recent Desktop Activity",
       description:
-        "Read the isolated desktop agent's bounded in-memory activity timeline for recent process, window, display, PipeWire audio, hardware-device, network-state, and desktop-notification changes. The cursor is monotonically increasing while the agent is running, so callers can remember a cursor before an action and compare later events. No keystrokes, screenshots, packet contents, command-line arguments, environment contents, raw hardware serials, or Bluetooth addresses are recorded.",
+        "Read the isolated desktop agent's bounded in-memory activity timeline for recent process, window, display, virtual-desktop, PipeWire audio, hardware-device, network-state, and desktop-notification changes. The cursor is monotonically increasing while the agent is running, so callers can remember a cursor before an action and compare later events. No keystrokes, screenshots, packet contents, command-line arguments, environment contents, raw hardware serials, or Bluetooth addresses are recorded.",
       inputSchema: {},
       outputSchema: {
         status: z.enum(["ready", "error"]),
@@ -306,8 +307,12 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
             "network.tunnel.stopped",
             "notification.created",
             "notification.closed",
+            "virtual-desktop.created",
+            "virtual-desktop.removed",
+            "virtual-desktop.changed",
+            "virtual-desktop.current.changed",
           ]),
-          sourceModule: z.enum(["processes", "windows", "displays", "audio", "devices", "network", "notifications"]),
+          sourceModule: z.enum(["processes", "windows", "displays", "audio", "devices", "network", "notifications", "virtual-desktops"]),
           entityId: z.string(),
           correlationId: z.string(),
           applicationId: z.string().optional(),
@@ -533,6 +538,48 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
         return {
           content: [{ type: "text" as const, text: result }],
           structuredContent: { status: "ready" as const, result, network },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "desktop_virtual_desktops",
+    {
+      title: "Desktop Virtual Desktops",
+      description:
+        "Read KDE virtual desktop state from the isolated desktop agent, including desktop IDs/names/order and which desktop is current. Read-only; this does not switch, create, rename, or remove desktops.",
+      inputSchema: {},
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        virtualDesktops: z.object({
+          generatedAt: z.string(),
+          currentId: z.string(),
+          count: z.number().int().nonnegative(),
+          rows: z.number().int().positive(),
+          navigationWrappingAround: z.boolean(),
+          desktops: z.array(z.object({
+            position: z.number().int().nonnegative(),
+            id: z.string(),
+            name: z.string(),
+            current: z.boolean(),
+          })),
+        }).optional(),
+      },
+      _meta: {},
+      annotations: readAnnotations,
+    },
+    async () => {
+      try {
+        const virtualDesktops = await client.virtualDesktops();
+        const result = formatVirtualDesktopSummary(virtualDesktops);
+        return {
+          content: [{ type: "text" as const, text: result }],
+          structuredContent: { status: "ready" as const, result, virtualDesktops },
         };
       } catch (error) {
         return clientErrorResponse(error);
@@ -816,6 +863,11 @@ function formatLogReadSummary(logs: DesktopLogReadResult): string {
 
 function formatLogSourceSummary(sources: DesktopLogSource[]): string {
   return `Desktop agent found ${sources.length} recent Linux user-journal source(s) available for explicit bounded reads.`;
+}
+
+function formatVirtualDesktopSummary(snapshot: DesktopVirtualDesktopSnapshot): string {
+  const current = snapshot.desktops.find((desktop) => desktop.current);
+  return `KDE virtual desktops: ${snapshot.count} desktop(s), ${snapshot.rows} row(s), current ${current?.name ?? snapshot.currentId}.`;
 }
 
 function formatNetworkSummary(network: DesktopNetworkSnapshot): string {

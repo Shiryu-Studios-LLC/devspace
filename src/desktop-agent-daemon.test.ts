@@ -430,6 +430,35 @@ test("desktop agent serves a structured read-only network snapshot", async (t) =
   assert.deepEqual(await client.networkSnapshot(), expectedNetwork);
 });
 
+test("desktop agent serves a structured read-only virtual desktop snapshot", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-virtual-desktops-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const expectedVirtualDesktops = {
+    generatedAt: "2026-09-20T06:50:00.000Z",
+    currentId: "desktop-2",
+    count: 2,
+    rows: 1,
+    navigationWrappingAround: false,
+    desktops: [
+      { position: 0, id: "desktop-1", name: "Main", current: false },
+      { position: 1, id: "desktop-2", name: "VR", current: true },
+    ],
+  };
+  const daemon = new DesktopAgentDaemon({
+    stateDir,
+    capabilities: () => [{ id: "virtual-desktops", state: "ready" }],
+    virtualDesktops: async () => expectedVirtualDesktops,
+  });
+  t.after(() => daemon.close());
+  await daemon.start();
+  const client = new DesktopAgentClient({
+    stateDir,
+    spawnDaemon: () => assert.fail("existing daemon should not be respawned"),
+  });
+
+  assert.deepEqual(await client.virtualDesktops(), expectedVirtualDesktops);
+});
+
 test("desktop agent serves bounded recent desktop notifications without actions", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-notifications-"));
   t.after(() => rm(stateDir, { recursive: true, force: true }));

@@ -13,6 +13,7 @@ import {
   decodeDesktopDisplayList,
   decodeDesktopNetworkSnapshot,
   decodeDesktopNotificationList,
+  decodeDesktopVirtualDesktopSnapshot,
   decodeDesktopLogReadResult,
   decodeDesktopLogSources,
   decodeDesktopTraceCorrelation,
@@ -95,6 +96,17 @@ test("desktop agent accepts the read-only network snapshot method", () => {
     protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
     authToken: "a".repeat(64),
     method: "network.snapshot",
+    params: {},
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
+});
+
+test("desktop agent accepts the read-only virtual desktop snapshot method", () => {
+  const request: DesktopAgentRequest = {
+    requestId: "request-virtual-desktops",
+    protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
+    authToken: "a".repeat(64),
+    method: "virtual-desktops.snapshot",
     params: {},
   };
   assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
@@ -409,6 +421,23 @@ test("desktop agent decodes a structured network snapshot", () => {
   assert.equal(network.interfaces[0]?.name, "enp5s0");
   assert.equal(network.listeners[0]?.port, 7676);
   assert.equal(network.cloudflareTunnel.running, true);
+});
+
+test("desktop agent decodes a structured virtual desktop snapshot", () => {
+  const snapshot = decodeDesktopVirtualDesktopSnapshot({
+    generatedAt: "2026-09-20T06:50:00.000Z",
+    currentId: "desktop-2",
+    count: 2,
+    rows: 1,
+    navigationWrappingAround: false,
+    desktops: [
+      { position: 0, id: "desktop-1", name: "Main", current: false },
+      { position: 1, id: "desktop-2", name: "VR", current: true },
+    ],
+  });
+  assert.equal(snapshot.currentId, "desktop-2");
+  assert.equal(snapshot.desktops[1]?.name, "VR");
+  assert.equal(snapshot.desktops[1]?.current, true);
 });
 
 test("desktop agent decodes a structured notification list", () => {

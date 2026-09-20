@@ -7,6 +7,7 @@ import type {
   DesktopDisplayInfo,
   DesktopNetworkSnapshot,
   DesktopNotificationInfo,
+  DesktopVirtualDesktopSnapshot,
   DesktopProcessInfo,
   DesktopWindowInfo,
 } from "./desktop-agent-protocol.js";
@@ -19,6 +20,7 @@ export interface DesktopActivityMonitorOptions {
   devices?: () => Promise<DesktopDeviceInfo[]>;
   network?: () => Promise<DesktopNetworkSnapshot>;
   notifications?: () => Promise<DesktopNotificationInfo[]>;
+  virtualDesktops?: () => Promise<DesktopVirtualDesktopSnapshot>;
   pollIntervalMs?: number;
   maxEvents?: number;
   now?: () => number;
@@ -35,6 +37,7 @@ export class DesktopActivityMonitor {
   private readonly devicesProvider?: () => Promise<DesktopDeviceInfo[]>;
   private readonly networkProvider?: () => Promise<DesktopNetworkSnapshot>;
   private readonly notificationsProvider?: () => Promise<DesktopNotificationInfo[]>;
+  private readonly virtualDesktopsProvider?: () => Promise<DesktopVirtualDesktopSnapshot>;
   private readonly pollIntervalMs: number;
   private readonly maxEvents: number;
   private readonly now: () => number;
@@ -48,6 +51,7 @@ export class DesktopActivityMonitor {
   private devices = new Map<string, DesktopDeviceInfo>();
   private network?: DesktopNetworkSnapshot;
   private notifications = new Map<string, DesktopNotificationInfo>();
+  private virtualDesktops?: DesktopVirtualDesktopSnapshot;
   private initialized = false;
   private polling = false;
   private sequence = 0;
@@ -61,6 +65,7 @@ export class DesktopActivityMonitor {
     this.devicesProvider = options.devices;
     this.networkProvider = options.network;
     this.notificationsProvider = options.notifications;
+    this.virtualDesktopsProvider = options.virtualDesktops;
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
     this.maxEvents = options.maxEvents ?? DEFAULT_MAX_EVENTS;
     this.now = options.now ?? Date.now;
@@ -104,13 +109,14 @@ export class DesktopActivityMonitor {
       // such as busctl, kscreen-doctor, or pw-dump. Finish those observations
       // before sampling /proc so the activity monitor does not report its own
       // probes as user process start/stop events.
-      const [windowsResult, displaysResult, audioResult, devicesResult, networkResult, notificationsResult] = await Promise.allSettled([
+      const [windowsResult, displaysResult, audioResult, devicesResult, networkResult, notificationsResult, virtualDesktopsResult] = await Promise.allSettled([
         this.windowsProvider(),
         this.displaysProvider(),
         this.audioProvider ? this.audioProvider() : Promise.resolve(undefined),
         this.devicesProvider ? this.devicesProvider() : Promise.resolve(undefined),
         this.networkProvider ? this.networkProvider() : Promise.resolve(undefined),
         this.notificationsProvider ? this.notificationsProvider() : Promise.resolve(undefined),
+        this.virtualDesktopsProvider ? this.virtualDesktopsProvider() : Promise.resolve(undefined),
       ]);
       const processesResult = await Promise.resolve(this.processesProvider()).then(
         (value) => ({ status: "fulfilled" as const, value }),
@@ -145,6 +151,7 @@ export class DesktopActivityMonitor {
       const nextNotifications = notificationList
         ? new Map(notificationList.map((notification) => [notification.id, notification]))
         : this.notifications;
+      const nextVirtualDesktops = virtualDesktopsResult.status === "fulfilled" ? virtualDesktopsResult.value : undefined;
 
       if (!this.initialized) {
         this.windows = nextWindows;
@@ -156,6 +163,7 @@ export class DesktopActivityMonitor {
         this.devices = nextDevices;
         this.network = nextNetwork;
         this.notifications = nextNotifications;
+        this.virtualDesktops = nextVirtualDesktops;
         this.initialized = true;
         return;
       }
@@ -170,6 +178,7 @@ export class DesktopActivityMonitor {
       if (deviceList) this.diffDevices(this.devices, nextDevices);
       if (nextNetwork && this.network) this.diffNetwork(this.network, nextNetwork);
       if (notificationList) this.diffNotifications(this.notifications, nextNotifications);
+      if (nextVirtualDesktops && this.virtualDesktops) this.diffVirtualDesktops(this.virtualDesktops, nextVirtualDesktops);
 
       this.windows = nextWindows;
       this.displays = nextDisplays;
@@ -180,6 +189,7 @@ export class DesktopActivityMonitor {
       this.devices = nextDevices;
       this.network = nextNetwork ?? this.network;
       this.notifications = nextNotifications;
+      this.virtualDesktops = nextVirtualDesktops ?? this.virtualDesktops;
     } finally {
       this.polling = false;
     }
@@ -544,6 +554,63 @@ export class DesktopActivityMonitor {
           summary: `Notification closed from ${notification.appName}: ${notification.summary || "(no title)"}.`,
         });
       }
+    }
+  }
+
+  private diffVirtualDesktops(
+    previous: DesktopVirtualDesktopSnapshot,
+    next: DesktopVirtualDesktopSnapshot,
+  ): void {
+    const previousMap = new Map(previous.desktops.map((desktop) => [desktop.id, desktop]));
+    const nextMap = new Map(next.desktops.map((desktop) => [desktop.id, desktop]));
+
+    for (const [id, desktop] of nextMap) {
+      const old = previousMap.get(id);
+      if (!old) {
+        this.push({
+          type: "virtual-desktop.created",
+          sourceModule: "virtual-desktops",
+          entityId: id,
+          correlationId: `virtual-desktop:${id}`,
+          title: desktop.name,
+          summary: `Virtual desktop created: ${desktop.name}.`,
+        });
+        continue;
+      }
+      if (old.name !== desktop.name || old.position !== desktop.position) {
+        this.push({
+          type: "virtual-desktop.changed",
+          sourceModule: "virtual-desktops",
+          entityId: id,
+          correlationId: `virtual-desktop:${id}`,
+          title: desktop.name,
+          summary: `Virtual desktop changed: ${desktop.name}.`,
+        });
+      }
+    }
+
+    for (const [id, desktop] of previousMap) {
+      if (nextMap.has(id)) continue;
+      this.push({
+        type: "virtual-desktop.removed",
+        sourceModule: "virtual-desktops",
+        entityId: id,
+        correlationId: `virtual-desktop:${id}`,
+        title: desktop.name,
+        summary: `Virtual desktop removed: ${desktop.name}.`,
+      });
+    }
+
+    if (previous.currentId !== next.currentId) {
+      const current = nextMap.get(next.currentId);
+      this.push({
+        type: "virtual-desktop.current.changed",
+        sourceModule: "virtual-desktops",
+        entityId: next.currentId,
+        correlationId: `virtual-desktop:${next.currentId}`,
+        title: current?.name,
+        summary: `Current virtual desktop changed${current ? ` to ${current.name}` : ""}.`,
+      });
     }
   }
 

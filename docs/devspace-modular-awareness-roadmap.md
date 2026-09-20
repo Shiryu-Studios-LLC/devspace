@@ -55,6 +55,7 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 
 - [x] Linux KDE/Wayland window/application awareness using KWin D-Bus window enumeration and per-window metadata, enriched with safe process identity from `/proc`.
 - [x] KDE monitor/display awareness using KScreen JSON plus KWin active-output state, including layout, scale, modes, refresh rate, physical size, priority, brightness, and active/primary status.
+- [x] Read-only KDE virtual desktop awareness, including desktop IDs/names/order, current desktop, rows, and navigation wrapping state.
 - [x] Structured Linux process/application awareness using `/proc`, correlated with KWin window ownership while excluding command-line arguments and environment variables.
 - [ ] Screenshot/window/region capture.
 - [ ] AT-SPI accessibility tree and semantic UI actions.
@@ -75,7 +76,8 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 
 - [x] Add a common event envelope with sequence, timestamp, source module, application identity, entity ID, and correlation ID.
 - [x] Add process start/stop events.
-- [ ] Add window focus events. Window create/close/move/resize/title/state changes are already captured by the polling timeline.
+- [ ] Add window focus events through a verified Wayland-native/AT-SPI signal path. Window create/close/move/resize/title/state changes are already captured by the polling timeline.
+- [x] Add virtual desktop create/remove/name/order/current-desktop events.
 - [x] Add PipeWire audio stream start/stop/change and route create/remove/topology-change events, while suppressing noisy link transport-state flaps.
 - [x] Add device connect/disconnect/change events with privacy-safe stable IDs.
 - [x] Add notification creation/closure events correlated to the sender PID when Plasma provides it.

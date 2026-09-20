@@ -129,13 +129,17 @@ export type DesktopActivityEventType =
   | "network.tunnel.started"
   | "network.tunnel.stopped"
   | "notification.created"
-  | "notification.closed";
+  | "notification.closed"
+  | "virtual-desktop.created"
+  | "virtual-desktop.removed"
+  | "virtual-desktop.changed"
+  | "virtual-desktop.current.changed";
 
 export interface DesktopActivityEvent {
   sequence: number;
   timestamp: string;
   type: DesktopActivityEventType;
-  sourceModule: "processes" | "windows" | "displays" | "audio" | "devices" | "network" | "notifications";
+  sourceModule: "processes" | "windows" | "displays" | "audio" | "devices" | "network" | "notifications" | "virtual-desktops";
   entityId: string;
   correlationId: string;
   applicationId?: string;
@@ -285,6 +289,22 @@ export interface DesktopNetworkSnapshot {
   };
 }
 
+export interface DesktopVirtualDesktopInfo {
+  position: number;
+  id: string;
+  name: string;
+  current: boolean;
+}
+
+export interface DesktopVirtualDesktopSnapshot {
+  generatedAt: string;
+  currentId: string;
+  count: number;
+  rows: number;
+  navigationWrappingAround: boolean;
+  desktops: DesktopVirtualDesktopInfo[];
+}
+
 export interface DesktopLogSource {
   id: string;
   kind: "journal";
@@ -347,6 +367,7 @@ export type DesktopAgentMethod =
   | "audio.graph"
   | "devices.list"
   | "network.snapshot"
+  | "virtual-desktops.snapshot"
   | "logs.sources"
   | "logs.read"
   | "trace.correlate"
@@ -588,6 +609,30 @@ export function decodeDesktopNetworkSnapshot(value: unknown): DesktopNetworkSnap
   };
 }
 
+export function decodeDesktopVirtualDesktopSnapshot(value: unknown): DesktopVirtualDesktopSnapshot {
+  const record = asRecord(value);
+  if (!record || !Array.isArray(record.desktops)) {
+    throw new DesktopAgentProtocolError("INVALID_VIRTUAL_DESKTOPS", "Desktop agent returned an invalid virtual desktop snapshot.");
+  }
+  return {
+    generatedAt: requiredString(record.generatedAt, "virtualDesktops.generatedAt"),
+    currentId: requiredString(record.currentId, "virtualDesktops.currentId"),
+    count: requiredInteger(record.count, "virtualDesktops.count"),
+    rows: requiredInteger(record.rows, "virtualDesktops.rows"),
+    navigationWrappingAround: requiredBoolean(record.navigationWrappingAround, "virtualDesktops.navigationWrappingAround"),
+    desktops: record.desktops.map((value) => {
+      const desktop = asRecord(value);
+      if (!desktop) throw new DesktopAgentProtocolError("INVALID_VIRTUAL_DESKTOPS", "Virtual desktop must be an object.");
+      return {
+        position: requiredInteger(desktop.position, "virtualDesktop.position"),
+        id: requiredString(desktop.id, "virtualDesktop.id"),
+        name: requiredString(desktop.name, "virtualDesktop.name"),
+        current: requiredBoolean(desktop.current, "virtualDesktop.current"),
+      };
+    }),
+  };
+}
+
 export function decodeDesktopLogSources(value: unknown): DesktopLogSource[] {
   if (!Array.isArray(value)) {
     throw new DesktopAgentProtocolError("INVALID_LOGS", "Desktop agent returned an invalid log source list.");
@@ -739,7 +784,7 @@ function decodeDesktopActivityEvent(value: unknown): DesktopActivityEvent {
     throw new DesktopAgentProtocolError("INVALID_EVENTS", `Invalid desktop activity event type: ${type}`);
   }
   const sourceModule = requiredString(record.sourceModule, "event.sourceModule");
-  if (sourceModule !== "processes" && sourceModule !== "windows" && sourceModule !== "displays" && sourceModule !== "audio" && sourceModule !== "devices" && sourceModule !== "network" && sourceModule !== "notifications") {
+  if (sourceModule !== "processes" && sourceModule !== "windows" && sourceModule !== "displays" && sourceModule !== "audio" && sourceModule !== "devices" && sourceModule !== "network" && sourceModule !== "notifications" && sourceModule !== "virtual-desktops") {
     throw new DesktopAgentProtocolError("INVALID_EVENTS", `Invalid desktop activity source: ${sourceModule}`);
   }
   return {
@@ -1018,6 +1063,7 @@ function isDesktopAgentMethod(value: string): value is DesktopAgentMethod {
     || value === "audio.graph"
     || value === "devices.list"
     || value === "network.snapshot"
+    || value === "virtual-desktops.snapshot"
     || value === "logs.sources"
     || value === "logs.read"
     || value === "trace.correlate"
@@ -1051,7 +1097,11 @@ function isDesktopActivityEventType(value: string): value is DesktopActivityEven
     || value === "network.tunnel.started"
     || value === "network.tunnel.stopped"
     || value === "notification.created"
-    || value === "notification.closed";
+    || value === "notification.closed"
+    || value === "virtual-desktop.created"
+    || value === "virtual-desktop.removed"
+    || value === "virtual-desktop.changed"
+    || value === "virtual-desktop.current.changed";
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
