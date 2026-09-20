@@ -8,6 +8,7 @@ import {
   decodeDesktopAgentResponse,
   decodeDesktopAgentStatus,
   decodeDesktopDisplayList,
+  decodeDesktopProcessList,
   decodeDesktopWindowList,
   encodeDesktopAgentRequest,
   type DesktopAgentRequest,
@@ -42,6 +43,17 @@ test("desktop agent accepts the read-only displays list method", () => {
     protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
     authToken: "a".repeat(64),
     method: "displays.list",
+    params: {},
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
+});
+
+test("desktop agent accepts the read-only processes list method", () => {
+  const request: DesktopAgentRequest = {
+    requestId: "request-processes",
+    protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
+    authToken: "a".repeat(64),
+    method: "processes.list",
     params: {},
   };
   assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
@@ -127,6 +139,27 @@ test("desktop agent decodes a structured display list", () => {
   assert.equal(displays[0]?.name, "HDMI-A-1");
   assert.equal(displays[0]?.currentMode?.refreshRate, 100);
   assert.equal(displays[0]?.active, true);
+});
+
+test("desktop agent decodes a structured process list", () => {
+  const processes = decodeDesktopProcessList([{
+    pid: 2501,
+    ppid: 1,
+    uid: 1000,
+    sameUser: true,
+    name: "ChatGPT",
+    state: "S (sleeping)",
+    executable: "/opt/ChatGPT/chatgpt",
+    threads: 24,
+    residentMemoryBytes: 134217728,
+    virtualMemoryBytes: 1073741824,
+    windowIds: ["{11111111-2222-3333-4444-555555555555}"],
+    windowCount: 1,
+    hasWindow: true,
+  }]);
+  assert.equal(processes[0]?.name, "ChatGPT");
+  assert.equal(processes[0]?.sameUser, true);
+  assert.equal(processes[0]?.windowCount, 1);
 });
 
 test("desktop agent response and status decode capability states", () => {

@@ -87,12 +87,29 @@ export interface DesktopDisplayInfo {
   connectorType?: number;
 }
 
+export interface DesktopProcessInfo {
+  pid: number;
+  ppid: number;
+  uid?: number;
+  sameUser?: boolean;
+  name: string;
+  state: string;
+  executable?: string;
+  threads?: number;
+  residentMemoryBytes?: number;
+  virtualMemoryBytes?: number;
+  windowIds: string[];
+  windowCount: number;
+  hasWindow: boolean;
+}
+
 export type DesktopAgentMethod =
   | "hello"
   | "desktop.status"
   | "desktop.capabilities"
   | "windows.list"
   | "displays.list"
+  | "processes.list"
   | "desktop.stop";
 
 export type DesktopAgentRequest = {
@@ -212,6 +229,13 @@ export function decodeDesktopDisplayList(value: unknown): DesktopDisplayInfo[] {
   return value.map(decodeDesktopDisplayInfo);
 }
 
+export function decodeDesktopProcessList(value: unknown): DesktopProcessInfo[] {
+  if (!Array.isArray(value)) {
+    throw new DesktopAgentProtocolError("INVALID_PROCESSES", "Desktop agent returned an invalid process list.");
+  }
+  return value.map(decodeDesktopProcessInfo);
+}
+
 export function desktopAgentProtocolVersion(): number {
   return DESKTOP_AGENT_PROTOCOL_VERSION;
 }
@@ -295,6 +319,26 @@ function decodeDesktopDisplayMode(value: unknown): DesktopDisplayMode {
   };
 }
 
+function decodeDesktopProcessInfo(value: unknown): DesktopProcessInfo {
+  const record = asRecord(value);
+  if (!record) throw new DesktopAgentProtocolError("INVALID_PROCESSES", "Desktop process must be an object.");
+  return {
+    pid: requiredInteger(record.pid, "process.pid"),
+    ppid: requiredInteger(record.ppid, "process.ppid"),
+    uid: optionalInteger(record.uid),
+    sameUser: optionalBoolean(record.sameUser),
+    name: requiredString(record.name, "process.name"),
+    state: requiredString(record.state, "process.state"),
+    executable: optionalString(record.executable),
+    threads: optionalInteger(record.threads),
+    residentMemoryBytes: optionalInteger(record.residentMemoryBytes),
+    virtualMemoryBytes: optionalInteger(record.virtualMemoryBytes),
+    windowIds: stringArray(record.windowIds, "process.windowIds"),
+    windowCount: requiredInteger(record.windowCount, "process.windowCount"),
+    hasWindow: requiredBoolean(record.hasWindow, "process.hasWindow"),
+  };
+}
+
 function decodeCapabilityStatus(value: unknown): DesktopCapabilityStatus {
   const record = asRecord(value);
   const state = requiredString(record?.state, "capability.state");
@@ -314,6 +358,7 @@ function isDesktopAgentMethod(value: string): value is DesktopAgentMethod {
     || value === "desktop.capabilities"
     || value === "windows.list"
     || value === "displays.list"
+    || value === "processes.list"
     || value === "desktop.stop";
 }
 

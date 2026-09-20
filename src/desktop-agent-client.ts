@@ -13,6 +13,7 @@ import {
   decodeDesktopAgentResponse,
   decodeDesktopAgentStatus,
   decodeDesktopDisplayList,
+  decodeDesktopProcessList,
   decodeDesktopWindowList,
   encodeDesktopAgentRequest,
   type DesktopAgentMethod,
@@ -21,6 +22,7 @@ import {
   type DesktopAgentStatus,
   type DesktopCapabilityStatus,
   type DesktopDisplayInfo,
+  type DesktopProcessInfo,
   type DesktopWindowInfo,
 } from "./desktop-agent-protocol.js";
 
@@ -94,6 +96,11 @@ export class DesktopAgentClient {
   async displays(): Promise<DesktopDisplayInfo[]> {
     await this.ensureReady();
     return decodeDesktopDisplayList(await this.requestExisting("displays.list"));
+  }
+
+  async processes(): Promise<DesktopProcessInfo[]> {
+    await this.ensureReady();
+    return decodeDesktopProcessList(await this.requestExisting("processes.list"));
   }
 
   async stop(): Promise<DesktopAgentStatus | undefined> {

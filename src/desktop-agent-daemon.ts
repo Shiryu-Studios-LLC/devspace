@@ -19,6 +19,7 @@ import {
   type DesktopAgentStatus,
   type DesktopCapabilityStatus,
   type DesktopDisplayInfo,
+  type DesktopProcessInfo,
   type DesktopWindowInfo,
 } from "./desktop-agent-protocol.js";
 import {
@@ -29,6 +30,10 @@ import {
   kdeDisplayAwarenessAvailable,
   listKdeDisplays,
 } from "./desktop-displays-kde.js";
+import {
+  linuxProcessAwarenessAvailable,
+  listLinuxProcesses,
+} from "./desktop-processes-linux.js";
 
 const MAX_REQUEST_BYTES = 128 * 1024;
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -39,6 +44,7 @@ export interface DesktopAgentDaemonOptions {
   capabilities?: () => DesktopCapabilityStatus[];
   windows?: () => Promise<DesktopWindowInfo[]>;
   displays?: () => Promise<DesktopDisplayInfo[]>;
+  processes?: () => Promise<DesktopProcessInfo[]>;
   now?: () => number;
   onClosed?: () => void;
 }
@@ -49,6 +55,7 @@ export class DesktopAgentDaemon {
   private readonly capabilitiesProvider: () => DesktopCapabilityStatus[];
   private readonly windowsProvider: () => Promise<DesktopWindowInfo[]>;
   private readonly displaysProvider: () => Promise<DesktopDisplayInfo[]>;
+  private readonly processesProvider: () => Promise<DesktopProcessInfo[]>;
   private readonly now: () => number;
   private readonly onClosed?: () => void;
   private readonly sockets = new Set<Socket>();
@@ -65,6 +72,7 @@ export class DesktopAgentDaemon {
     this.capabilitiesProvider = options.capabilities ?? defaultDesktopCapabilities;
     this.windowsProvider = options.windows ?? listKdeWindows;
     this.displaysProvider = options.displays ?? listKdeDisplays;
+    this.processesProvider = options.processes ?? defaultProcessInventory;
     this.now = options.now ?? Date.now;
     this.onClosed = options.onClosed;
   }
@@ -248,6 +256,16 @@ export class DesktopAgentDaemon {
         }
         return this.displaysProvider();
       }
+      case "processes.list": {
+        const processesCapability = this.capabilitiesProvider().find((capability) => capability.id === "processes");
+        if (processesCapability?.state !== "ready") {
+          throw new DesktopAgentProtocolError(
+            "DESKTOP_PROCESSES_UNAVAILABLE",
+            processesCapability?.detail ?? "Process awareness is unavailable.",
+          );
+        }
+        return this.processesProvider();
+      }
       case "desktop.stop":
         this.stopping = true;
         return this.status();
@@ -284,6 +302,7 @@ export class DesktopAgentDaemon {
 export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
   const windowsReady = kdeWindowAwarenessAvailable();
   const displaysReady = kdeDisplayAwarenessAvailable();
+  const processesReady = linuxProcessAwarenessAvailable();
   return [
     windowsReady
       ? { id: "windows", state: "ready", detail: "KDE/KWin D-Bus window inventory" }
@@ -291,6 +310,9 @@ export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
     displaysReady
       ? { id: "displays", state: "ready", detail: "KDE KScreen display inventory" }
       : { id: "displays", state: "unavailable", detail: "KDE KScreen graphical session is unavailable" },
+    processesReady
+      ? { id: "processes", state: "ready", detail: "Linux /proc process inventory without command-line arguments or environment data" }
+      : { id: "processes", state: "unavailable", detail: "Linux /proc is unavailable" },
     { id: "screen", state: "not_implemented" },
     { id: "input", state: "not_implemented" },
     { id: "accessibility", state: "not_implemented" },
@@ -301,6 +323,19 @@ export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
     { id: "network", state: "not_implemented" },
     { id: "events", state: "not_implemented" },
   ];
+}
+
+async function defaultProcessInventory(): Promise<DesktopProcessInfo[]> {
+  let windows: DesktopWindowInfo[] = [];
+  if (kdeWindowAwarenessAvailable()) {
+    try {
+      windows = await listKdeWindows();
+    } catch {
+      // Process awareness remains useful even if the compositor cannot provide
+      // the current window inventory for correlation.
+    }
+  }
+  return listLinuxProcesses(windows);
 }
 
 export function writeDesktopAgentLog(

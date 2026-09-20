@@ -55,6 +55,7 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 
 - [x] Linux KDE/Wayland window/application awareness using KWin D-Bus window enumeration and per-window metadata, enriched with safe process identity from `/proc`.
 - [x] KDE monitor/display awareness using KScreen JSON plus KWin active-output state, including layout, scale, modes, refresh rate, physical size, priority, brightness, and active/primary status.
+- [x] Structured Linux process/application awareness using `/proc`, correlated with KWin window ownership while excluding command-line arguments and environment variables.
 - [ ] Screenshot/window/region capture.
 - [ ] AT-SPI accessibility tree and semantic UI actions.
 - [ ] Keyboard/mouse input control.

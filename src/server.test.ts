@@ -205,6 +205,7 @@ test("module status keeps core health separate from secondary modules", async (t
     "desktop_agent_capabilities",
     "desktop_list_windows",
     "desktop_list_displays",
+    "desktop_list_processes",
     "desktop_agent_stop",
   ]) {
     assert.equal(

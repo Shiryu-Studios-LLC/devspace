@@ -10,6 +10,7 @@ import type {
   DesktopAgentStatus,
   DesktopCapabilityStatus,
   DesktopDisplayInfo,
+  DesktopProcessInfo,
   DesktopWindowInfo,
 } from "../desktop-agent-protocol.js";
 
@@ -213,6 +214,50 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
 
   registerAppTool(
     server,
+    "desktop_list_processes",
+    {
+      title: "List Desktop Processes",
+      description:
+        "List Linux processes visible to the isolated desktop agent, including PID/parent/UID, process state, executable when readable, thread and memory basics, and associated desktop windows. Command-line arguments and environment variables are intentionally excluded.",
+      inputSchema: {},
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        processes: z.array(z.object({
+          pid: z.number().int(),
+          ppid: z.number().int(),
+          uid: z.number().int().optional(),
+          sameUser: z.boolean().optional(),
+          name: z.string(),
+          state: z.string(),
+          executable: z.string().optional(),
+          threads: z.number().int().optional(),
+          residentMemoryBytes: z.number().int().nonnegative().optional(),
+          virtualMemoryBytes: z.number().int().nonnegative().optional(),
+          windowIds: z.array(z.string()),
+          windowCount: z.number().int().nonnegative(),
+          hasWindow: z.boolean(),
+        })).optional(),
+      },
+      _meta: {},
+      annotations: readAnnotations,
+    },
+    async () => {
+      try {
+        const processes = await client.processes();
+        const result = formatProcessSummary(processes);
+        return {
+          content: [{ type: "text" as const, text: result }],
+          structuredContent: { status: "ready" as const, result, processes },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
     "desktop_agent_stop",
     {
       title: "Stop Desktop Agent",
@@ -277,6 +322,12 @@ function describeStatus(status: DesktopAgentStatus): string {
     `session ${status.sessionType}`,
     `protocol ${status.protocolVersion}`,
   ].join("; ");
+}
+
+function formatProcessSummary(processes: DesktopProcessInfo[]): string {
+  const userProcesses = processes.filter((processInfo) => processInfo.sameUser === true);
+  const withWindows = processes.filter((processInfo) => processInfo.hasWindow);
+  return `Desktop agent sees ${processes.length} process(es), ${userProcesses.length} owned by the desktop user, ${withWindows.length} associated with desktop windows.`;
 }
 
 function formatDisplaySummary(displays: DesktopDisplayInfo[]): string {
