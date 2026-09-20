@@ -29,6 +29,7 @@ import {
   decodeDesktopClipboardReadResult,
   decodeDesktopClipboardWriteResult,
   decodeDesktopAccessibilityActionResult,
+  decodeDesktopInputResult,
   decodeDesktopAccessibilitySnapshot,
   decodeDesktopWindowList,
   encodeDesktopAgentRequest,
@@ -55,6 +56,8 @@ import {
   type DesktopClipboardWriteResult,
   type DesktopAccessibilityActionRequest,
   type DesktopAccessibilityActionResult,
+  type DesktopInputRequest,
+  type DesktopInputResult,
   type DesktopAccessibilitySnapshot,
   type DesktopWindowInfo,
 } from "./desktop-agent-protocol.js";
@@ -156,6 +159,10 @@ export class DesktopAgentClient {
 
   async accessibilityAction(request: DesktopAccessibilityActionRequest): Promise<DesktopAccessibilityActionResult> {
     return decodeDesktopAccessibilityActionResult(await this.requestReady("accessibility.action", { ...request }));
+  }
+
+  async input(request: DesktopInputRequest): Promise<DesktopInputResult> {
+    return decodeDesktopInputResult(await this.requestReady("input.perform", { ...request }));
   }
 
   async recentActivity(): Promise<DesktopActivityTimeline> {

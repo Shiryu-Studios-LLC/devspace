@@ -74,6 +74,8 @@ import {
   type DesktopAccessibilityActionRequest,
   type DesktopAccessibilityActionResult,
   type DesktopAccessibilitySnapshot,
+  type DesktopInputRequest,
+  type DesktopInputResult,
   type DesktopWindowInfo,
 } from "./desktop-agent-protocol.js";
 import {
@@ -104,6 +106,10 @@ import {
   createAtspiAccessibilityProvider,
   type DesktopAccessibilitySnapshotOptions,
 } from "./desktop-accessibility-atspi.js";
+import {
+  createYdotoolInputProvider,
+  ydotoolInputAvailable,
+} from "./desktop-input-ydotool.js";
 
 const MAX_REQUEST_BYTES = 128 * 1024;
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -121,6 +127,7 @@ export interface DesktopAgentDaemonOptions {
   clipboardWrite?: (text: string) => Promise<DesktopClipboardWriteResult>;
   accessibilitySnapshot?: (options?: DesktopAccessibilitySnapshotOptions) => Promise<DesktopAccessibilitySnapshot>;
   accessibilityAction?: (request: DesktopAccessibilityActionRequest) => Promise<DesktopAccessibilityActionResult>;
+  input?: (request: DesktopInputRequest) => Promise<DesktopInputResult>;
   audioGraph?: () => Promise<DesktopAudioGraph>;
   devices?: () => Promise<DesktopDeviceInfo[]>;
   networkSnapshot?: () => Promise<DesktopNetworkSnapshot>;
@@ -148,6 +155,7 @@ export class DesktopAgentDaemon {
   private readonly clipboardWriteProvider: (text: string) => Promise<DesktopClipboardWriteResult>;
   private readonly accessibilitySnapshotProvider: (options?: DesktopAccessibilitySnapshotOptions) => Promise<DesktopAccessibilitySnapshot>;
   private readonly accessibilityActionProvider: (request: DesktopAccessibilityActionRequest) => Promise<DesktopAccessibilityActionResult>;
+  private readonly inputProvider: (request: DesktopInputRequest) => Promise<DesktopInputResult>;
   private readonly audioGraphProvider: () => Promise<DesktopAudioGraph>;
   private readonly devicesProvider: () => Promise<DesktopDeviceInfo[]>;
   private readonly networkSnapshotProvider: () => Promise<DesktopNetworkSnapshot>;
@@ -181,6 +189,7 @@ export class DesktopAgentDaemon {
     this.clipboardWriteProvider = options.clipboardWrite ?? writeWaylandClipboardText;
     this.accessibilitySnapshotProvider = options.accessibilitySnapshot ?? createAtspiAccessibilityProvider();
     this.accessibilityActionProvider = options.accessibilityAction ?? createAtspiAccessibilityActionProvider();
+    this.inputProvider = options.input ?? createYdotoolInputProvider({ now: options.now });
     this.audioGraphProvider = options.audioGraph ?? getPipeWireAudioGraph;
     this.devicesProvider = options.devices ?? listLinuxDevices;
     this.networkSnapshotProvider = options.networkSnapshot ?? getLinuxNetworkSnapshot;
@@ -491,6 +500,16 @@ export class DesktopAgentDaemon {
         }
         return this.accessibilityActionProvider(request.params);
       }
+      case "input.perform": {
+        const inputCapability = this.capabilitiesProvider().find((capability) => capability.id === "input");
+        if (inputCapability?.state !== "ready") {
+          throw new DesktopAgentProtocolError(
+            "DESKTOP_INPUT_UNAVAILABLE",
+            inputCapability?.detail ?? "Keyboard/mouse input control is unavailable.",
+          );
+        }
+        return this.inputProvider(request.params);
+      }
       case "events.recent": {
         const eventsCapability = this.capabilitiesProvider().find((capability) => capability.id === "events");
         if (eventsCapability?.state !== "ready") {
@@ -644,6 +663,7 @@ export function defaultDesktopCapabilities(
   const clipboardReadReady = waylandClipboardReadAvailable();
   const clipboardWriteReady = waylandClipboardWriteAvailable();
   const accessibilityReady = atspiAccessibilityAvailable();
+  const inputReady = ydotoolInputAvailable();
   const audioReady = pipeWireAudioAwarenessAvailable();
   const devicesReady = linuxDeviceAwarenessAvailable();
   const networkReady = linuxNetworkAwarenessAvailable();
@@ -675,9 +695,9 @@ export function defaultDesktopCapabilities(
     permissionAwareCapability(permissions, "screen", screenReady,
       "KDE/KWin native workspace, screen, window, active-window, and rectangular PNG capture",
       "KDE/KWin ScreenShot2 capture helper is unavailable"),
-    desktopPermissionGranted(permissions, "input")
-      ? { id: "input", state: "not_implemented" }
-      : disabledCapability("input"),
+    permissionAwareCapability(permissions, "input", inputReady,
+      "Validated Wayland keyboard/mouse control through the existing user-scoped ydotool daemon",
+      "ydotool or the user-scoped ydotool daemon socket is unavailable"),
     permissionAwareCapability(permissions, "accessibility", accessibilityReady,
       "Bounded read-only AT-SPI semantic tree with roles, states, bounds, interfaces, and action metadata",
       "AT-SPI accessibility helper or desktop accessibility bus is unavailable"),
@@ -726,6 +746,7 @@ function permissionForDesktopMethod(method: DesktopAgentRequest["method"]): Desk
     case "clipboard.write": return "clipboard-write";
     case "accessibility.snapshot":
     case "accessibility.action": return "accessibility";
+    case "input.perform": return "input";
     case "events.recent": return "events";
     case "audio.graph": return "audio";
     case "devices.list": return "devices";

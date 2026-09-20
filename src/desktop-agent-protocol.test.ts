@@ -23,6 +23,7 @@ import {
   decodeDesktopClipboardReadResult,
   decodeDesktopClipboardWriteResult,
   decodeDesktopAccessibilityActionResult,
+  decodeDesktopInputResult,
   decodeDesktopAccessibilitySnapshot,
   decodeDesktopWindowList,
   encodeDesktopAgentRequest,
@@ -191,6 +192,37 @@ test("desktop agent accepts guarded accessibility action requests", () => {
   assert.throws(
     () => decodeDesktopAgentRequest({ ...request, params: { ...request.params, expectedName: 7 } }),
     /expectedName must be a string/,
+  );
+});
+
+test("desktop agent accepts bounded high-level input requests", () => {
+  const chord: DesktopAgentRequest = {
+    requestId: "request-input-chord",
+    protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
+    authToken: "a".repeat(64),
+    method: "input.perform",
+    params: { type: "key-chord", key: "l", modifiers: ["ctrl"], keyDelayMs: 10 },
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(chord))), chord);
+  const move: DesktopAgentRequest = {
+    requestId: "request-input-move",
+    protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
+    authToken: "a".repeat(64),
+    method: "input.perform",
+    params: { type: "mouse-move", mode: "relative", x: 5, y: -2 },
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(move))), move);
+  assert.throws(
+    () => decodeDesktopAgentRequest({ ...move, params: { type: "mouse-move", mode: "absolute", x: -1, y: 0 } }),
+    /outside the absolute bounds/,
+  );
+  assert.throws(
+    () => decodeDesktopAgentRequest({ ...chord, params: { type: "key-chord", key: "power" } }),
+    /Unsupported input key/,
+  );
+  assert.throws(
+    () => decodeDesktopAgentRequest({ ...chord, params: { type: "type-text", text: "x".repeat(16_385) } }),
+    /at most 16384/,
   );
 });
 
@@ -388,6 +420,16 @@ test("desktop agent decodes a structured accessibility action result", () => {
   assert.equal(action.performed, true);
   assert.equal(action.nodeId, "pid-1234.0.2");
   assert.equal(action.actionName, "click");
+});
+
+test("desktop agent decodes a structured input result", () => {
+  const input = decodeDesktopInputResult({
+    type: "key-chord",
+    completed: true,
+    completedAt: "2026-09-20T12:00:00.000Z",
+  });
+  assert.equal(input.type, "key-chord");
+  assert.equal(input.completed, true);
 });
 
 test("desktop agent decodes a structured window list", () => {

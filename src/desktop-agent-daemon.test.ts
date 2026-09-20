@@ -374,6 +374,43 @@ test("desktop agent serves bounded accessibility snapshots/actions and enforces 
   assert.equal(actionCalls, 1);
 });
 
+test("desktop agent serves validated input and enforces input permission", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-input-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const permissions = defaultDesktopPermissionPolicy();
+  permissions.input = false;
+  let inputCalls = 0;
+  const daemon = new DesktopAgentDaemon({
+    stateDir,
+    permissions,
+    capabilities: () => [{ id: "input", state: "ready" }],
+    input: async (request) => {
+      inputCalls += 1;
+      return {
+        type: request.type,
+        completed: true,
+        completedAt: "2026-09-20T12:00:00.000Z",
+      };
+    },
+  });
+  t.after(() => daemon.close());
+  await daemon.start();
+  const client = new DesktopAgentClient({
+    stateDir,
+    spawnDaemon: () => assert.fail("existing daemon should not be respawned"),
+  });
+
+  await assert.rejects(() => client.input({ type: "key-chord", key: "enter" }), (error: unknown) => (
+    error instanceof DesktopAgentClientError && error.code === "DESKTOP_PERMISSION_DENIED"
+  ));
+  assert.equal(inputCalls, 0, "denied input must not reach the provider");
+
+  daemon.updatePermissions(defaultDesktopPermissionPolicy());
+  const result = await client.input({ type: "key-chord", key: "enter" });
+  assert.equal(result.completed, true);
+  assert.equal(inputCalls, 1);
+});
+
 test("desktop agent enforces denied permissions before providers run", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-permissions-"));
   t.after(() => rm(stateDir, { recursive: true, force: true }));

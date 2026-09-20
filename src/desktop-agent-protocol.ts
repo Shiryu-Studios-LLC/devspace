@@ -124,6 +124,29 @@ export interface DesktopAccessibilityActionResult {
   performedAt: string;
 }
 
+export type DesktopInputModifier = "ctrl" | "shift" | "alt" | "meta";
+
+export type DesktopInputKey =
+  | "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m"
+  | "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z"
+  | "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"
+  | "enter" | "escape" | "tab" | "backspace" | "space" | "delete" | "insert"
+  | "left" | "right" | "up" | "down" | "home" | "end" | "pageup" | "pagedown"
+  | "f1" | "f2" | "f3" | "f4" | "f5" | "f6" | "f7" | "f8" | "f9" | "f10" | "f11" | "f12";
+
+export type DesktopInputRequest =
+  | { type: "mouse-move"; mode: "relative" | "absolute"; x: number; y: number }
+  | { type: "mouse-click"; button: "left" | "right" | "middle"; count?: number; nextDelayMs?: number }
+  | { type: "mouse-scroll"; x?: number; y: number }
+  | { type: "type-text"; text: string; keyDelayMs?: number; keyHoldMs?: number }
+  | { type: "key-chord"; key: DesktopInputKey; modifiers?: DesktopInputModifier[]; keyDelayMs?: number };
+
+export interface DesktopInputResult {
+  type: DesktopInputRequest["type"];
+  completed: boolean;
+  completedAt: string;
+}
+
 export interface DesktopAgentStatus {
   state: "ready" | "stopping";
   protocolVersion: number;
@@ -494,6 +517,7 @@ export type DesktopAgentMethod =
   | "clipboard.write"
   | "accessibility.snapshot"
   | "accessibility.action"
+  | "input.perform"
   | "desktop.stop";
 
 type DesktopAgentRequestBase = {
@@ -502,7 +526,7 @@ type DesktopAgentRequestBase = {
   authToken: string;
 };
 
-type DesktopAgentNoParamsMethod = Exclude<DesktopAgentMethod, "logs.read" | "trace.correlate" | "screen.capture" | "clipboard.write" | "accessibility.snapshot" | "accessibility.action">;
+type DesktopAgentNoParamsMethod = Exclude<DesktopAgentMethod, "logs.read" | "trace.correlate" | "screen.capture" | "clipboard.write" | "accessibility.snapshot" | "accessibility.action" | "input.perform">;
 
 export type DesktopAgentRequest = DesktopAgentRequestBase & (
   | {
@@ -546,6 +570,10 @@ export type DesktopAgentRequest = DesktopAgentRequestBase & (
   | {
       method: "accessibility.action";
       params: DesktopAccessibilityActionRequest;
+    }
+  | {
+      method: "input.perform";
+      params: DesktopInputRequest;
     }
 );
 
@@ -686,6 +714,94 @@ export function decodeDesktopAgentRequest(value: unknown): DesktopAgentRequest {
         ...(expectedAccessibleId === undefined ? {} : { expectedAccessibleId }),
       },
     };
+  }
+  if (method === "input.perform") {
+    const type = requiredString(params.type, "input.type") as DesktopInputRequest["type"];
+    if (type === "mouse-move") {
+      const allowed = new Set(["type", "mode", "x", "y"]);
+      if (Object.keys(params).some((key) => !allowed.has(key))) {
+        throw new DesktopAgentProtocolError("INVALID_PARAMS", "input.perform mouse-move received unknown parameters.");
+      }
+      const mode = requiredString(params.mode, "input.mode");
+      const x = requiredInteger(params.x, "input.x");
+      const y = requiredInteger(params.y, "input.y");
+      if (mode !== "relative" && mode !== "absolute") {
+        throw new DesktopAgentProtocolError("INVALID_PARAMS", "input.mode must be relative or absolute.");
+      }
+      const limit = mode === "absolute" ? 100_000 : 32_768;
+      const minimum = mode === "absolute" ? 0 : -limit;
+      if (x < minimum || x > limit || y < minimum || y > limit) {
+        throw new DesktopAgentProtocolError("INVALID_PARAMS", `input mouse coordinates are outside the ${mode} bounds.`);
+      }
+      return { requestId, protocolVersion, authToken, method, params: { type, mode, x, y } };
+    }
+    if (type === "mouse-click") {
+      const allowed = new Set(["type", "button", "count", "nextDelayMs"]);
+      if (Object.keys(params).some((key) => !allowed.has(key))) {
+        throw new DesktopAgentProtocolError("INVALID_PARAMS", "input.perform mouse-click received unknown parameters.");
+      }
+      const button = requiredString(params.button, "input.button");
+      if (button !== "left" && button !== "right" && button !== "middle") {
+        throw new DesktopAgentProtocolError("INVALID_PARAMS", "input.button must be left, right, or middle.");
+      }
+      const count = params.count === undefined ? undefined : requiredInteger(params.count, "input.count");
+      const nextDelayMs = params.nextDelayMs === undefined ? undefined : requiredInteger(params.nextDelayMs, "input.nextDelayMs");
+      if (count !== undefined && (count < 1 || count > 10)) {
+        throw new DesktopAgentProtocolError("INVALID_PARAMS", "input.count must be between 1 and 10.");
+      }
+      if (nextDelayMs !== undefined && (nextDelayMs < 0 || nextDelayMs > 1000)) {
+        throw new DesktopAgentProtocolError("INVALID_PARAMS", "input.nextDelayMs must be between 0 and 1000.");
+      }
+      return { requestId, protocolVersion, authToken, method, params: { type, button, ...(count === undefined ? {} : { count }), ...(nextDelayMs === undefined ? {} : { nextDelayMs }) } };
+    }
+    if (type === "mouse-scroll") {
+      const allowed = new Set(["type", "x", "y"]);
+      if (Object.keys(params).some((key) => !allowed.has(key))) {
+        throw new DesktopAgentProtocolError("INVALID_PARAMS", "input.perform mouse-scroll received unknown parameters.");
+      }
+      const x = params.x === undefined ? undefined : requiredInteger(params.x, "input.x");
+      const y = requiredInteger(params.y, "input.y");
+      if ((x !== undefined && (x < -120 || x > 120)) || y < -120 || y > 120) {
+        throw new DesktopAgentProtocolError("INVALID_PARAMS", "input scroll values must be between -120 and 120.");
+      }
+      return { requestId, protocolVersion, authToken, method, params: { type, ...(x === undefined ? {} : { x }), y } };
+    }
+    if (type === "type-text") {
+      const allowed = new Set(["type", "text", "keyDelayMs", "keyHoldMs"]);
+      if (Object.keys(params).some((key) => !allowed.has(key))) {
+        throw new DesktopAgentProtocolError("INVALID_PARAMS", "input.perform type-text received unknown parameters.");
+      }
+      if (typeof params.text !== "string" || params.text.length > 16_384) {
+        throw new DesktopAgentProtocolError("INVALID_PARAMS", "input.text must be a string of at most 16384 characters.");
+      }
+      const keyDelayMs = params.keyDelayMs === undefined ? undefined : requiredInteger(params.keyDelayMs, "input.keyDelayMs");
+      const keyHoldMs = params.keyHoldMs === undefined ? undefined : requiredInteger(params.keyHoldMs, "input.keyHoldMs");
+      if ((keyDelayMs !== undefined && (keyDelayMs < 0 || keyDelayMs > 1000)) || (keyHoldMs !== undefined && (keyHoldMs < 0 || keyHoldMs > 1000))) {
+        throw new DesktopAgentProtocolError("INVALID_PARAMS", "input key delays must be between 0 and 1000 ms.");
+      }
+      return { requestId, protocolVersion, authToken, method, params: { type, text: params.text, ...(keyDelayMs === undefined ? {} : { keyDelayMs }), ...(keyHoldMs === undefined ? {} : { keyHoldMs }) } };
+    }
+    if (type === "key-chord") {
+      const allowed = new Set(["type", "key", "modifiers", "keyDelayMs"]);
+      if (Object.keys(params).some((key) => !allowed.has(key))) {
+        throw new DesktopAgentProtocolError("INVALID_PARAMS", "input.perform key-chord received unknown parameters.");
+      }
+      const key = requiredString(params.key, "input.key");
+      if (!isDesktopInputKey(key)) {
+        throw new DesktopAgentProtocolError("INVALID_PARAMS", `Unsupported input key: ${key}`);
+      }
+      const modifiersRaw = params.modifiers === undefined ? [] : params.modifiers;
+      if (!Array.isArray(modifiersRaw) || modifiersRaw.length > 4 || modifiersRaw.some((value) => typeof value !== "string" || !isDesktopInputModifier(value))) {
+        throw new DesktopAgentProtocolError("INVALID_PARAMS", "input.modifiers contains an unsupported modifier.");
+      }
+      const modifiers = [...new Set(modifiersRaw as DesktopInputModifier[])];
+      const keyDelayMs = params.keyDelayMs === undefined ? undefined : requiredInteger(params.keyDelayMs, "input.keyDelayMs");
+      if (keyDelayMs !== undefined && (keyDelayMs < 0 || keyDelayMs > 1000)) {
+        throw new DesktopAgentProtocolError("INVALID_PARAMS", "input.keyDelayMs must be between 0 and 1000 ms.");
+      }
+      return { requestId, protocolVersion, authToken, method, params: { type, key, ...(modifiers.length ? { modifiers } : {}), ...(keyDelayMs === undefined ? {} : { keyDelayMs }) } };
+    }
+    throw new DesktopAgentProtocolError("INVALID_PARAMS", `Unknown input action type: ${type}`);
   }
   if (method === "clipboard.write") {
     const allowed = new Set(["text"]);
@@ -976,6 +1092,22 @@ export function decodeDesktopAccessibilityActionResult(value: unknown): DesktopA
     actionIndex,
     actionName: typeof record.actionName === "string" ? record.actionName : "",
     performedAt: requiredString(record.performedAt, "accessibility.performedAt"),
+  };
+}
+
+export function decodeDesktopInputResult(value: unknown): DesktopInputResult {
+  const record = asRecord(value);
+  if (!record) {
+    throw new DesktopAgentProtocolError("INVALID_INPUT", "Desktop agent returned an invalid input result.");
+  }
+  const type = requiredString(record.type, "input.type") as DesktopInputResult["type"];
+  if (type !== "mouse-move" && type !== "mouse-click" && type !== "mouse-scroll" && type !== "type-text" && type !== "key-chord") {
+    throw new DesktopAgentProtocolError("INVALID_INPUT", `Unknown input result type: ${type}`);
+  }
+  return {
+    type,
+    completed: requiredBoolean(record.completed, "input.completed"),
+    completedAt: requiredString(record.completedAt, "input.completedAt"),
   };
 }
 
@@ -1518,7 +1650,32 @@ function isDesktopAgentMethod(value: string): value is DesktopAgentMethod {
     || value === "clipboard.write"
     || value === "accessibility.snapshot"
     || value === "accessibility.action"
+    || value === "input.perform"
     || value === "desktop.stop";
+}
+
+function isDesktopInputModifier(value: string): value is DesktopInputModifier {
+  return value === "ctrl" || value === "shift" || value === "alt" || value === "meta";
+}
+
+function isDesktopInputKey(value: string): value is DesktopInputKey {
+  return /^[a-z0-9]$/.test(value)
+    || value === "enter"
+    || value === "escape"
+    || value === "tab"
+    || value === "backspace"
+    || value === "space"
+    || value === "delete"
+    || value === "insert"
+    || value === "left"
+    || value === "right"
+    || value === "up"
+    || value === "down"
+    || value === "home"
+    || value === "end"
+    || value === "pageup"
+    || value === "pagedown"
+    || /^f(?:[1-9]|1[0-2])$/.test(value);
 }
 
 function isDesktopScreenCaptureTarget(value: string): value is DesktopScreenCaptureTarget {

@@ -37,6 +37,23 @@ const readAnnotations = {
   openWorldHint: false,
 };
 
+const inputAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: false,
+};
+
+const desktopInputOutputSchema = {
+  status: z.enum(["ready", "error"]),
+  result: z.string(),
+  input: z.object({
+    type: z.enum(["mouse-move", "mouse-click", "mouse-scroll", "type-text", "key-chord"]),
+    completed: z.boolean(),
+    completedAt: z.string(),
+  }).optional(),
+};
+
 export function registerDesktopAgentTools(server: McpServer, config: ServerConfig): void {
   const client = new DesktopAgentClient({ stateDir: config.stateDir });
 
@@ -575,6 +592,135 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
           content: [{ type: "text" as const, text: result }],
           structuredContent: { status: "ready" as const, result, action },
         };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "desktop_mouse_move",
+    {
+      title: "Move Desktop Mouse",
+      description: "Move the Wayland pointer through DevSpace's validated user-scoped input provider. Relative coordinates are limited to ±32768; absolute coordinates are limited to 0..100000.",
+      inputSchema: {
+        mode: z.enum(["relative", "absolute"]),
+        x: z.number().int(),
+        y: z.number().int(),
+      },
+      outputSchema: desktopInputOutputSchema,
+      _meta: {},
+      annotations: inputAnnotations,
+    },
+    async ({ mode, x, y }) => {
+      try {
+        const input = await client.input({ type: "mouse-move", mode, x, y });
+        const result = formatInputSummary(input);
+        return { content: [{ type: "text" as const, text: result }], structuredContent: { status: "ready" as const, result, input } };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "desktop_mouse_click",
+    {
+      title: "Click Desktop Mouse",
+      description: "Click the left, right, or middle mouse button through DevSpace's validated user-scoped Wayland input provider.",
+      inputSchema: {
+        button: z.enum(["left", "right", "middle"]),
+        count: z.number().int().min(1).max(10).optional(),
+        nextDelayMs: z.number().int().min(0).max(1000).optional(),
+      },
+      outputSchema: desktopInputOutputSchema,
+      _meta: {},
+      annotations: inputAnnotations,
+    },
+    async ({ button, count, nextDelayMs }) => {
+      try {
+        const input = await client.input({ type: "mouse-click", button, count, nextDelayMs });
+        const result = formatInputSummary(input);
+        return { content: [{ type: "text" as const, text: result }], structuredContent: { status: "ready" as const, result, input } };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "desktop_mouse_scroll",
+    {
+      title: "Scroll Desktop Mouse",
+      description: "Scroll the Wayland pointer wheel through DevSpace's validated input provider. Values are bounded to -120..120 per axis.",
+      inputSchema: {
+        x: z.number().int().min(-120).max(120).optional(),
+        y: z.number().int().min(-120).max(120),
+      },
+      outputSchema: desktopInputOutputSchema,
+      _meta: {},
+      annotations: inputAnnotations,
+    },
+    async ({ x, y }) => {
+      try {
+        const input = await client.input({ type: "mouse-scroll", x, y });
+        const result = formatInputSummary(input);
+        return { content: [{ type: "text" as const, text: result }], structuredContent: { status: "ready" as const, result, input } };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "desktop_type_text",
+    {
+      title: "Type Desktop Text",
+      description: "Type literal text into the currently focused desktop control through DevSpace's validated input provider. Text is limited to 16384 characters and is passed directly to ydotool without shell interpretation.",
+      inputSchema: {
+        text: z.string().max(16_384),
+        keyDelayMs: z.number().int().min(0).max(1000).optional(),
+        keyHoldMs: z.number().int().min(0).max(1000).optional(),
+      },
+      outputSchema: desktopInputOutputSchema,
+      _meta: {},
+      annotations: inputAnnotations,
+    },
+    async ({ text, keyDelayMs, keyHoldMs }) => {
+      try {
+        const input = await client.input({ type: "type-text", text, keyDelayMs, keyHoldMs });
+        const result = formatInputSummary(input);
+        return { content: [{ type: "text" as const, text: result }], structuredContent: { status: "ready" as const, result, input } };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "desktop_key_chord",
+    {
+      title: "Press Desktop Key Chord",
+      description: "Press and release one named keyboard key with optional Ctrl/Shift/Alt/Meta modifiers through the validated Wayland input provider.",
+      inputSchema: {
+        key: z.enum(["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z","0","1","2","3","4","5","6","7","8","9","enter","escape","tab","backspace","space","delete","insert","left","right","up","down","home","end","pageup","pagedown","f1","f2","f3","f4","f5","f6","f7","f8","f9","f10","f11","f12"]),
+        modifiers: z.array(z.enum(["ctrl", "shift", "alt", "meta"])).max(4).optional(),
+        keyDelayMs: z.number().int().min(0).max(1000).optional(),
+      },
+      outputSchema: desktopInputOutputSchema,
+      _meta: {},
+      annotations: inputAnnotations,
+    },
+    async ({ key, modifiers, keyDelayMs }) => {
+      try {
+        const input = await client.input({ type: "key-chord", key, modifiers, keyDelayMs });
+        const result = formatInputSummary(input);
+        return { content: [{ type: "text" as const, text: result }], structuredContent: { status: "ready" as const, result, input } };
       } catch (error) {
         return clientErrorResponse(error);
       }
@@ -1192,6 +1338,10 @@ function formatAccessibilitySummary(snapshot: DesktopAccessibilitySnapshot): str
 
 function formatAccessibilityActionSummary(action: { performed: boolean; actionName: string; nodeId: string }): string {
   return `${action.performed ? "Performed" : "AT-SPI declined"} semantic action ${JSON.stringify(action.actionName)} on ${action.nodeId}.`;
+}
+
+function formatInputSummary(input: { type: string; completed: boolean }): string {
+  return `${input.completed ? "Completed" : "Did not complete"} desktop input action ${input.type}.`;
 }
 
 function formatClipboardReadSummary(clipboard: DesktopClipboardReadResult): string {

@@ -62,7 +62,7 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [x] KDE/Wayland screenshot capture for workspace, named/active screen, named/active window, and rectangular areas via a narrowly authorized KWin ScreenShot2 helper; captures are private temporary PNGs deleted after MCP delivery.
 - [x] Bounded read-only AT-SPI accessibility tree with semantic roles, states, bounds, interfaces, and action metadata; editable/text contents intentionally excluded.
 - [x] Guarded AT-SPI semantic UI action execution using pid-based node paths plus stale-target role/name/accessibility-ID verification.
-- [ ] Keyboard/mouse input control.
+- [x] Validated Wayland keyboard/mouse input control through the existing user-scoped `ydotoold`, with bounded mouse move/click/scroll, literal text typing, and named-key chords behind the `input` permission.
 - [x] Wayland text clipboard read/write with independent `clipboard-read` / `clipboard-write` permissions and bounded 1 MiB payloads.
 - [x] Read-only bounded in-memory desktop notification awareness via passive freedesktop/Plasma D-Bus observation.
 - [ ] Desktop notification actions/dismissal/reply handling with explicit permissions.
