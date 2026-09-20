@@ -65,7 +65,8 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [x] Validated Wayland keyboard/mouse input control through the existing user-scoped `ydotoold`, with bounded mouse move/click/scroll, literal text typing, and named-key chords behind the `input` permission.
 - [x] Wayland text clipboard read/write with independent `clipboard-read` / `clipboard-write` permissions and bounded 1 MiB payloads.
 - [x] Read-only bounded in-memory desktop notification awareness via passive freedesktop/Plasma D-Bus observation.
-- [ ] Desktop notification actions/dismissal/reply handling with explicit permissions.
+- [x] Desktop notification dismissal and advertised action invocation through native Plasma D-Bus, restricted to still-open notifications observed by the Desktop Agent and gated by `notification-actions`.
+- [ ] Desktop notification inline reply handling; Plasma exposes reply signals but no callable reply method on the discovered notification interface.
 - [x] Read-only PipeWire audio graph, application streams, channel ports, and active route links.
 - [ ] PipeWire live meters and richer runtime stream telemetry.
 - [x] Read-only Linux USB, PCI/PCIe, block-storage, and Bluetooth inventory with privacy-safe identifiers.

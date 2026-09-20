@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   LinuxNotificationMonitor,
+  createLinuxNotificationControlProvider,
   linuxNotificationMonitorArgs,
 } from "./desktop-notifications-linux.js";
 
@@ -82,6 +83,69 @@ test("Linux notification monitor records Notify calls, assigned IDs, and close s
   notifications = monitor.recent();
   assert.equal(notifications[0]?.closedAt, "2026-09-20T06:20:01.000Z");
   assert.equal(notifications[0]?.closeReason, 2);
+});
+
+test("Linux notification control only targets observed open notifications and advertised actions", async () => {
+  const calls: string[][] = [];
+  const observed = [{
+    id: "dbus::1.5:9",
+    notificationId: 15,
+    appName: "DevSpace Test",
+    summary: "Action test",
+    body: "",
+    actions: [{ id: "default", label: "Open" }],
+    expireTimeoutMs: -1,
+    createdAt: "2026-09-20T06:20:00.000Z",
+  }];
+  const provider = createLinuxNotificationControlProvider(
+    () => observed,
+    {
+      now: () => Date.parse("2026-09-20T06:21:00.000Z"),
+      runBusctl: async (args) => { calls.push(args); },
+    },
+  );
+
+  const dismissed = await provider({ type: "dismiss", id: observed[0]!.id });
+  assert.equal(dismissed.completed, true);
+  assert.equal(dismissed.notificationId, 15);
+  assert.deepEqual(calls[0], [
+    "--user", "call", "org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+    "org.freedesktop.Notifications", "CloseNotification", "u", "15",
+  ]);
+
+  const invoked = await provider({ type: "invoke-action", id: observed[0]!.id, actionId: "default" });
+  assert.equal(invoked.actionId, "default");
+  assert.deepEqual(calls[1], [
+    "--user", "call", "org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+    "org.kde.NotificationManager", "InvokeAction", "us", "15", "default",
+  ]);
+
+  await assert.rejects(() => provider({ type: "dismiss", id: "unknown" }), /not observed/);
+  await assert.rejects(
+    () => provider({ type: "invoke-action", id: observed[0]!.id, actionId: "delete-everything" }),
+    /not advertised/,
+  );
+  assert.equal(calls.length, 2, "rejected controls must not touch D-Bus");
+});
+
+test("Linux notification control rejects closed notifications", async () => {
+  let calls = 0;
+  const provider = createLinuxNotificationControlProvider(
+    () => [{
+      id: "closed",
+      notificationId: 99,
+      appName: "App",
+      summary: "Closed",
+      body: "",
+      actions: [],
+      expireTimeoutMs: -1,
+      createdAt: "2026-09-20T06:20:00.000Z",
+      closedAt: "2026-09-20T06:20:01.000Z",
+    }],
+    { runBusctl: async () => { calls += 1; } },
+  );
+  await assert.rejects(() => provider({ type: "dismiss", id: "closed" }), /already closed/);
+  assert.equal(calls, 0);
 });
 
 test("Linux notification monitor keeps a bounded in-memory history", () => {

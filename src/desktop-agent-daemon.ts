@@ -32,7 +32,9 @@ import {
 } from "./desktop-logs-linux.js";
 import {
   LinuxNotificationMonitor,
+  createLinuxNotificationControlProvider,
   linuxNotificationAwarenessAvailable,
+  linuxNotificationControlAvailable,
   type DesktopNotificationMonitor,
 } from "./desktop-notifications-linux.js";
 import { appendFileSync, chmodSync, rmSync } from "node:fs";
@@ -63,6 +65,8 @@ import {
   type DesktopVirtualDesktopSnapshot,
   type DesktopPermissionStatus,
   type DesktopNotificationInfo,
+  type DesktopNotificationControlRequest,
+  type DesktopNotificationControlResult,
   type DesktopLogReadResult,
   type DesktopLogSource,
   type DesktopTraceCorrelation,
@@ -137,6 +141,7 @@ export interface DesktopAgentDaemonOptions {
   readLogsForPid?: (pid: number, options?: { lines?: number; query?: string }) => Promise<DesktopLogReadResult>;
   notificationMonitor?: DesktopNotificationMonitor;
   notifications?: () => Promise<DesktopNotificationInfo[]>;
+  notificationControl?: (request: DesktopNotificationControlRequest) => Promise<DesktopNotificationControlResult>;
   activityMonitor?: DesktopActivityMonitor;
   now?: () => number;
   onClosed?: () => void;
@@ -165,6 +170,7 @@ export class DesktopAgentDaemon {
   private readonly readLogsForPidProvider: (pid: number, options?: { lines?: number; query?: string }) => Promise<DesktopLogReadResult>;
   private readonly notificationMonitor?: DesktopNotificationMonitor;
   private readonly notificationsProvider: () => Promise<DesktopNotificationInfo[]>;
+  private readonly notificationControlProvider: (request: DesktopNotificationControlRequest) => Promise<DesktopNotificationControlResult>;
   private readonly activityMonitor: DesktopActivityMonitor;
   private readonly now: () => number;
   private readonly onClosed?: () => void;
@@ -199,6 +205,10 @@ export class DesktopAgentDaemon {
     this.readLogsForPidProvider = options.readLogsForPid ?? readLinuxLogsForPid;
     this.notificationMonitor = options.notificationMonitor ?? (options.notifications ? undefined : new LinuxNotificationMonitor({ now: options.now }));
     this.notificationsProvider = options.notifications ?? (() => Promise.resolve(this.notificationMonitor?.recent() ?? []));
+    this.notificationControlProvider = options.notificationControl ?? createLinuxNotificationControlProvider(
+      () => this.notificationMonitor?.recent() ?? [],
+      { now: options.now },
+    );
     this.activityMonitor = options.activityMonitor ?? new DesktopActivityMonitor({
       windows: () => this.permissionAware("windows", this.windowsProvider),
       displays: () => this.permissionAware("displays", this.displaysProvider),
@@ -596,6 +606,16 @@ export class DesktopAgentDaemon {
         }
         return this.notificationsProvider();
       }
+      case "notifications.perform": {
+        const controlCapability = this.capabilitiesProvider().find((capability) => capability.id === "notification-actions");
+        if (controlCapability?.state !== "ready") {
+          throw new DesktopAgentProtocolError(
+            "DESKTOP_NOTIFICATION_ACTIONS_UNAVAILABLE",
+            controlCapability?.detail ?? "Notification controls are unavailable.",
+          );
+        }
+        return this.notificationControlProvider(request.params);
+      }
       case "trace.correlate": {
         const tracingCapability = this.capabilitiesProvider().find((capability) => capability.id === "tracing");
         if (tracingCapability?.state !== "ready") {
@@ -669,6 +689,7 @@ export function defaultDesktopCapabilities(
   const networkReady = linuxNetworkAwarenessAvailable();
   const logsReady = linuxLogAwarenessAvailable();
   const notificationsReady = linuxNotificationAwarenessAvailable();
+  const notificationActionsReady = linuxNotificationControlAvailable();
   const virtualDesktopsReady = kdeVirtualDesktopAwarenessAvailable();
   const eventsSourceReady = (
     (desktopPermissionGranted(permissions, "windows") && windowsReady)
@@ -710,6 +731,9 @@ export function defaultDesktopCapabilities(
     permissionAwareCapability(permissions, "notifications", notificationsReady,
       "Read-only bounded in-memory observation of freedesktop notifications delivered through Plasma",
       "Plasma notification D-Bus service is unavailable"),
+    permissionAwareCapability(permissions, "notification-actions", notificationActionsReady && notificationsReady,
+      "Dismiss observed notifications and invoke only action IDs advertised by those notifications through Plasma D-Bus",
+      "Plasma notification action D-Bus service is unavailable"),
     permissionAwareCapability(permissions, "audio", audioReady,
       "Read-only PipeWire audio nodes, ports, and routing links", "PipeWire user-session graph is unavailable"),
     permissionAwareCapability(permissions, "devices", devicesReady,
@@ -755,6 +779,7 @@ function permissionForDesktopMethod(method: DesktopAgentRequest["method"]): Desk
     case "logs.sources":
     case "logs.read": return "logs";
     case "notifications.recent": return "notifications";
+    case "notifications.perform": return "notification-actions";
     case "trace.correlate": return "tracing";
     default: return undefined;
   }

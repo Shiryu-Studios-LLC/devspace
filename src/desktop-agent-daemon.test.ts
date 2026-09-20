@@ -879,6 +879,48 @@ test("desktop agent serves bounded recent desktop notifications without actions"
   assert.deepEqual(await client.notifications(), expectedNotifications);
 });
 
+test("desktop agent serves guarded notification controls and enforces notification-actions permission", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-notification-actions-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const permissions = defaultDesktopPermissionPolicy();
+  permissions["notification-actions"] = false;
+  let calls = 0;
+  const daemon = new DesktopAgentDaemon({
+    stateDir,
+    permissions,
+    capabilities: () => [{ id: "notification-actions", state: "ready" }],
+    notificationControl: async (request) => {
+      calls += 1;
+      return {
+        type: request.type,
+        id: request.id,
+        notificationId: 15,
+        ...(request.type === "invoke-action" ? { actionId: request.actionId } : {}),
+        completed: true,
+        completedAt: "2026-09-20T06:21:00.000Z",
+      };
+    },
+  });
+  t.after(() => daemon.close());
+  await daemon.start();
+  const client = new DesktopAgentClient({
+    stateDir,
+    spawnDaemon: () => assert.fail("existing daemon should not be respawned"),
+  });
+
+  await assert.rejects(
+    () => client.notificationControl({ type: "dismiss", id: "dbus::1.5:9" }),
+    (error: unknown) => error instanceof DesktopAgentClientError && error.code === "DESKTOP_PERMISSION_DENIED",
+  );
+  assert.equal(calls, 0);
+
+  daemon.updatePermissions(defaultDesktopPermissionPolicy());
+  const result = await client.notificationControl({ type: "invoke-action", id: "dbus::1.5:9", actionId: "default" });
+  assert.equal(result.completed, true);
+  assert.equal(result.actionId, "default");
+  assert.equal(calls, 1);
+});
+
 test("desktop agent serves explicit bounded log sources and reads", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-logs-"));
   t.after(() => rm(stateDir, { recursive: true, force: true }));

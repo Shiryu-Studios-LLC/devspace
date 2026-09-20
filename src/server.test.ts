@@ -227,6 +227,8 @@ test("module status keeps core health separate from secondary modules", async (t
     "desktop_log_sources",
     "desktop_read_logs",
     "desktop_recent_notifications",
+    "desktop_dismiss_notification",
+    "desktop_invoke_notification_action",
     "desktop_trace_correlation",
     "desktop_agent_stop",
   ]) {

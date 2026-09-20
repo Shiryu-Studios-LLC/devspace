@@ -14,6 +14,7 @@ import {
   decodeDesktopDisplayList,
   decodeDesktopNetworkSnapshot,
   decodeDesktopNotificationList,
+  decodeDesktopNotificationControlResult,
   decodeDesktopVirtualDesktopSnapshot,
   decodeDesktopLogReadResult,
   decodeDesktopLogSources,
@@ -311,6 +312,27 @@ test("desktop agent accepts the recent notifications method", () => {
     params: {},
   };
   assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
+});
+
+test("desktop agent accepts guarded notification control requests", () => {
+  const dismiss: DesktopAgentRequest = {
+    requestId: "request-notification-dismiss",
+    protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
+    authToken: "a".repeat(64),
+    method: "notifications.perform",
+    params: { type: "dismiss", id: "dbus::1.5:9" },
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(dismiss))), dismiss);
+  const invoke: DesktopAgentRequest = {
+    ...dismiss,
+    requestId: "request-notification-action",
+    params: { type: "invoke-action", id: "dbus::1.5:9", actionId: "default" },
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(invoke))), invoke);
+  assert.throws(
+    () => decodeDesktopAgentRequest({ ...invoke, params: { type: "invoke-action", id: "x" } }),
+    /actionId/,
+  );
 });
 
 test("desktop agent accepts the read-only audio graph method", () => {
@@ -691,6 +713,19 @@ test("desktop agent decodes a structured virtual desktop snapshot", () => {
   assert.equal(snapshot.currentId, "desktop-2");
   assert.equal(snapshot.desktops[1]?.name, "VR");
   assert.equal(snapshot.desktops[1]?.current, true);
+});
+
+test("desktop agent decodes a structured notification control result", () => {
+  const result = decodeDesktopNotificationControlResult({
+    type: "invoke-action",
+    id: "dbus::1.5:9",
+    notificationId: 15,
+    actionId: "default",
+    completed: true,
+    completedAt: "2026-09-20T06:21:00.000Z",
+  });
+  assert.equal(result.completed, true);
+  assert.equal(result.actionId, "default");
 });
 
 test("desktop agent decodes a structured notification list", () => {

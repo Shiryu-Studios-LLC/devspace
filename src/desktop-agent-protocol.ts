@@ -495,6 +495,19 @@ export interface DesktopNotificationInfo {
   closeReason?: number;
 }
 
+export type DesktopNotificationControlRequest =
+  | { type: "dismiss"; id: string }
+  | { type: "invoke-action"; id: string; actionId: string };
+
+export interface DesktopNotificationControlResult {
+  type: DesktopNotificationControlRequest["type"];
+  id: string;
+  notificationId: number;
+  actionId?: string;
+  completed: boolean;
+  completedAt: string;
+}
+
 export type DesktopAgentMethod =
   | "hello"
   | "desktop.status"
@@ -512,6 +525,7 @@ export type DesktopAgentMethod =
   | "logs.read"
   | "trace.correlate"
   | "notifications.recent"
+  | "notifications.perform"
   | "screen.capture"
   | "clipboard.read"
   | "clipboard.write"
@@ -526,7 +540,7 @@ type DesktopAgentRequestBase = {
   authToken: string;
 };
 
-type DesktopAgentNoParamsMethod = Exclude<DesktopAgentMethod, "logs.read" | "trace.correlate" | "screen.capture" | "clipboard.write" | "accessibility.snapshot" | "accessibility.action" | "input.perform">;
+type DesktopAgentNoParamsMethod = Exclude<DesktopAgentMethod, "logs.read" | "trace.correlate" | "screen.capture" | "clipboard.write" | "accessibility.snapshot" | "accessibility.action" | "input.perform" | "notifications.perform">;
 
 export type DesktopAgentRequest = DesktopAgentRequestBase & (
   | {
@@ -574,6 +588,10 @@ export type DesktopAgentRequest = DesktopAgentRequestBase & (
   | {
       method: "input.perform";
       params: DesktopInputRequest;
+    }
+  | {
+      method: "notifications.perform";
+      params: DesktopNotificationControlRequest;
     }
 );
 
@@ -802,6 +820,40 @@ export function decodeDesktopAgentRequest(value: unknown): DesktopAgentRequest {
       return { requestId, protocolVersion, authToken, method, params: { type, key, ...(modifiers.length ? { modifiers } : {}), ...(keyDelayMs === undefined ? {} : { keyDelayMs }) } };
     }
     throw new DesktopAgentProtocolError("INVALID_PARAMS", `Unknown input action type: ${type}`);
+  }
+  if (method === "notifications.perform") {
+    const type = requiredString(params.type, "notifications.type") as DesktopNotificationControlRequest["type"];
+    if (type === "dismiss") {
+      const allowed = new Set(["type", "id"]);
+      if (Object.keys(params).some((key) => !allowed.has(key))) {
+        throw new DesktopAgentProtocolError("INVALID_PARAMS", "notifications.perform dismiss received unknown parameters.");
+      }
+      return {
+        requestId,
+        protocolVersion,
+        authToken,
+        method,
+        params: { type, id: requiredString(params.id, "notifications.id") },
+      };
+    }
+    if (type === "invoke-action") {
+      const allowed = new Set(["type", "id", "actionId"]);
+      if (Object.keys(params).some((key) => !allowed.has(key))) {
+        throw new DesktopAgentProtocolError("INVALID_PARAMS", "notifications.perform invoke-action received unknown parameters.");
+      }
+      return {
+        requestId,
+        protocolVersion,
+        authToken,
+        method,
+        params: {
+          type,
+          id: requiredString(params.id, "notifications.id"),
+          actionId: requiredString(params.actionId, "notifications.actionId"),
+        },
+      };
+    }
+    throw new DesktopAgentProtocolError("INVALID_PARAMS", `Unknown notification action type: ${type}`);
   }
   if (method === "clipboard.write") {
     const allowed = new Set(["text"]);
@@ -1249,6 +1301,29 @@ export function decodeDesktopNotificationList(value: unknown): DesktopNotificati
   return value.map(decodeDesktopNotificationInfo);
 }
 
+export function decodeDesktopNotificationControlResult(value: unknown): DesktopNotificationControlResult {
+  const record = asRecord(value);
+  if (!record) {
+    throw new DesktopAgentProtocolError("INVALID_NOTIFICATIONS", "Desktop agent returned an invalid notification control result.");
+  }
+  const type = requiredString(record.type, "notifications.type") as DesktopNotificationControlResult["type"];
+  if (type !== "dismiss" && type !== "invoke-action") {
+    throw new DesktopAgentProtocolError("INVALID_NOTIFICATIONS", `Invalid notification control type: ${type}`);
+  }
+  const notificationId = requiredInteger(record.notificationId, "notifications.notificationId");
+  if (notificationId < 0) {
+    throw new DesktopAgentProtocolError("INVALID_NOTIFICATIONS", "Notification ID must be non-negative.");
+  }
+  return {
+    type,
+    id: requiredString(record.id, "notifications.id"),
+    notificationId,
+    ...(record.actionId === undefined ? {} : { actionId: requiredString(record.actionId, "notifications.actionId") }),
+    completed: requiredBoolean(record.completed, "notifications.completed"),
+    completedAt: requiredString(record.completedAt, "notifications.completedAt"),
+  };
+}
+
 export function desktopAgentProtocolVersion(): number {
   return DESKTOP_AGENT_PROTOCOL_VERSION;
 }
@@ -1645,6 +1720,7 @@ function isDesktopAgentMethod(value: string): value is DesktopAgentMethod {
     || value === "logs.read"
     || value === "trace.correlate"
     || value === "notifications.recent"
+    || value === "notifications.perform"
     || value === "screen.capture"
     || value === "clipboard.read"
     || value === "clipboard.write"

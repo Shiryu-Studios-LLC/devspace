@@ -1181,6 +1181,84 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
 
   registerAppTool(
     server,
+    "desktop_dismiss_notification",
+    {
+      title: "Dismiss Desktop Notification",
+      description:
+        "Dismiss one still-open notification that this Desktop Agent actually observed. The id must come from desktop_recent_notifications; arbitrary Plasma notification IDs are not accepted.",
+      inputSchema: {
+        id: z.string().min(1).max(512),
+      },
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        control: z.object({
+          type: z.literal("dismiss"),
+          id: z.string(),
+          notificationId: z.number().int().nonnegative(),
+          completed: z.boolean(),
+          completedAt: z.string(),
+        }).optional(),
+      },
+      _meta: {},
+      annotations: inputAnnotations,
+    },
+    async ({ id }) => {
+      try {
+        const control = await client.notificationControl({ type: "dismiss", id });
+        const result = `Dismissed observed notification ${control.id}.`;
+        return {
+          content: [{ type: "text" as const, text: result }],
+          structuredContent: { status: "ready" as const, result, control },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "desktop_invoke_notification_action",
+    {
+      title: "Invoke Desktop Notification Action",
+      description:
+        "Invoke one action button advertised by a still-open notification that this Desktop Agent observed. Both the notification id and actionId must come from desktop_recent_notifications.",
+      inputSchema: {
+        id: z.string().min(1).max(512),
+        actionId: z.string().min(1).max(256),
+      },
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        control: z.object({
+          type: z.literal("invoke-action"),
+          id: z.string(),
+          notificationId: z.number().int().nonnegative(),
+          actionId: z.string(),
+          completed: z.boolean(),
+          completedAt: z.string(),
+        }).optional(),
+      },
+      _meta: {},
+      annotations: inputAnnotations,
+    },
+    async ({ id, actionId }) => {
+      try {
+        const control = await client.notificationControl({ type: "invoke-action", id, actionId });
+        const result = `Invoked notification action ${JSON.stringify(control.actionId)} for ${control.id}.`;
+        return {
+          content: [{ type: "text" as const, text: result }],
+          structuredContent: { status: "ready" as const, result, control },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
     "desktop_trace_correlation",
     {
       title: "Desktop Trace Correlation",

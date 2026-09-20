@@ -21,6 +21,7 @@ import {
   decodeDesktopNetworkSnapshot,
   decodeDesktopVirtualDesktopSnapshot,
   decodeDesktopNotificationList,
+  decodeDesktopNotificationControlResult,
   decodeDesktopLogReadResult,
   decodeDesktopLogSources,
   decodeDesktopTraceCorrelation,
@@ -46,6 +47,8 @@ import {
   type DesktopNetworkSnapshot,
   type DesktopVirtualDesktopSnapshot,
   type DesktopNotificationInfo,
+  type DesktopNotificationControlRequest,
+  type DesktopNotificationControlResult,
   type DesktopLogReadResult,
   type DesktopLogSource,
   type DesktopTraceCorrelation,
@@ -207,6 +210,10 @@ export class DesktopAgentClient {
 
   async notifications(): Promise<DesktopNotificationInfo[]> {
     return decodeDesktopNotificationList(await this.requestReady("notifications.recent"));
+  }
+
+  async notificationControl(request: DesktopNotificationControlRequest): Promise<DesktopNotificationControlResult> {
+    return decodeDesktopNotificationControlResult(await this.requestReady("notifications.perform", { ...request }));
   }
 
   async stop(): Promise<DesktopAgentStatus | undefined> {

@@ -1,11 +1,18 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import type { DesktopNotificationInfo } from "./desktop-agent-protocol.js";
+import { promisify } from "node:util";
+import type {
+  DesktopNotificationControlRequest,
+  DesktopNotificationControlResult,
+  DesktopNotificationInfo,
+} from "./desktop-agent-protocol.js";
 
 const BUSCTL = "/usr/bin/busctl";
 const NOTIFICATION_SERVICE = "org.freedesktop.Notifications";
 const NOTIFICATION_PATH = "/org/freedesktop/Notifications";
 const NOTIFICATION_INTERFACE = "org.freedesktop.Notifications";
+const KDE_NOTIFICATION_MANAGER_INTERFACE = "org.kde.NotificationManager";
+const execFileAsync = promisify(execFile);
 const DEFAULT_MAX_NOTIFICATIONS = 250;
 const DEFAULT_RECENT_LIMIT = 100;
 
@@ -215,6 +222,78 @@ export function linuxNotificationAwarenessAvailable(): boolean {
   const address = env.DBUS_SESSION_BUS_ADDRESS;
   if (typeof address !== "string" || !address.startsWith("unix:path=")) return false;
   return existsSync(address.slice("unix:path=".length));
+}
+
+export const linuxNotificationControlAvailable = linuxNotificationAwarenessAvailable;
+
+export function createLinuxNotificationControlProvider(
+  getNotifications: () => DesktopNotificationInfo[],
+  options: {
+    now?: () => number;
+    runBusctl?: (args: string[], env: NodeJS.ProcessEnv) => Promise<void>;
+  } = {},
+): (request: DesktopNotificationControlRequest) => Promise<DesktopNotificationControlResult> {
+  const now = options.now ?? Date.now;
+  const runBusctl = options.runBusctl ?? (async (args, env) => {
+    await execFileAsync(BUSCTL, args, {
+      env,
+      timeout: 5_000,
+      maxBuffer: 1024 * 1024,
+    });
+  });
+  return async (request) => {
+    if (!options.runBusctl && !linuxNotificationControlAvailable()) {
+      throw new Error("Plasma notification control is unavailable in this desktop session.");
+    }
+    const notification = getNotifications().find((item) => item.id === request.id);
+    if (!notification) {
+      throw new Error("Notification was not observed by this Desktop Agent.");
+    }
+    if (notification.closedAt) {
+      throw new Error("Notification is already closed.");
+    }
+    if (!Number.isSafeInteger(notification.notificationId) || (notification.notificationId ?? -1) < 0) {
+      throw new Error("Notification does not yet have a Plasma notification ID.");
+    }
+    const notificationId = notification.notificationId as number;
+    let args: string[];
+    if (request.type === "dismiss") {
+      args = [
+        "--user",
+        "call",
+        NOTIFICATION_SERVICE,
+        NOTIFICATION_PATH,
+        NOTIFICATION_INTERFACE,
+        "CloseNotification",
+        "u",
+        String(notificationId),
+      ];
+    } else {
+      if (!notification.actions.some((action) => action.id === request.actionId)) {
+        throw new Error("Notification action was not advertised by the observed notification.");
+      }
+      args = [
+        "--user",
+        "call",
+        NOTIFICATION_SERVICE,
+        NOTIFICATION_PATH,
+        KDE_NOTIFICATION_MANAGER_INTERFACE,
+        "InvokeAction",
+        "us",
+        String(notificationId),
+        request.actionId,
+      ];
+    }
+    await runBusctl(args, desktopBusEnvironment());
+    return {
+      type: request.type,
+      id: request.id,
+      notificationId,
+      ...(request.type === "invoke-action" ? { actionId: request.actionId } : {}),
+      completed: true,
+      completedAt: new Date(now()).toISOString(),
+    };
+  };
 }
 
 function desktopBusEnvironment(): NodeJS.ProcessEnv {
