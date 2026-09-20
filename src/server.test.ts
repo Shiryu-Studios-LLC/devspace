@@ -212,6 +212,7 @@ test("module status keeps core health separate from secondary modules", async (t
     "desktop_network_snapshot",
     "desktop_log_sources",
     "desktop_read_logs",
+    "desktop_trace_correlation",
     "desktop_agent_stop",
   ]) {
     assert.equal(

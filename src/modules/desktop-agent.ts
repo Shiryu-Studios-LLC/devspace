@@ -16,6 +16,7 @@ import type {
   DesktopNetworkSnapshot,
   DesktopLogReadResult,
   DesktopLogSource,
+  DesktopTraceCorrelation,
   DesktopProcessInfo,
   DesktopWindowInfo,
 } from "../desktop-agent-protocol.js";
@@ -622,6 +623,69 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
 
   registerAppTool(
     server,
+    "desktop_trace_correlation",
+    {
+      title: "Desktop Trace Correlation",
+      description:
+        "Correlate one desktop activity correlation ID with recent bounded activity events and, for pid:<pid> IDs, recent Linux user-journal messages from that same PID. Optional query filters only the log-message portion. No unrelated journal sources or arbitrary file paths are read.",
+      inputSchema: {
+        correlationId: z.string().min(1).max(256),
+        lines: z.number().int().min(1).max(500).optional(),
+        query: z.string().min(1).max(256).optional(),
+      },
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        trace: z.object({
+          correlationId: z.string(),
+          generatedAt: z.string(),
+          events: z.array(z.object({
+            sequence: z.number().int(),
+            timestamp: z.string(),
+            type: z.string(),
+            sourceModule: z.string(),
+            entityId: z.string(),
+            correlationId: z.string(),
+            applicationId: z.string().optional(),
+            pid: z.number().int().optional(),
+            title: z.string().optional(),
+            summary: z.string(),
+          })),
+          logs: z.object({
+            sourceId: z.string(),
+            generatedAt: z.string(),
+            query: z.string().optional(),
+            entries: z.array(z.object({
+              timestamp: z.string(),
+              priority: z.number().int().optional(),
+              unit: z.string().optional(),
+              identifier: z.string().optional(),
+              processName: z.string().optional(),
+              pid: z.number().int().optional(),
+              message: z.string(),
+            })),
+          }).optional(),
+        }).optional(),
+      },
+      _meta: {},
+      annotations: readAnnotations,
+    },
+    async ({ correlationId, lines, query }) => {
+      try {
+        const trace = await client.traceCorrelation(correlationId, { lines, query });
+        const result = formatTraceSummary(trace);
+        return {
+          content: [{ type: "text" as const, text: result }],
+          structuredContent: { status: "ready" as const, result, trace },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
     "desktop_agent_stop",
     {
       title: "Stop Desktop Agent",
@@ -686,6 +750,10 @@ function describeStatus(status: DesktopAgentStatus): string {
     `session ${status.sessionType}`,
     `protocol ${status.protocolVersion}`,
   ].join("; ");
+}
+
+function formatTraceSummary(trace: DesktopTraceCorrelation): string {
+  return `Trace ${trace.correlationId}: ${trace.events.length} activity event(s), ${trace.logs?.entries.length ?? 0} correlated journal entr${trace.logs?.entries.length === 1 ? "y" : "ies"}.`;
 }
 
 function formatLogReadSummary(logs: DesktopLogReadResult): string {

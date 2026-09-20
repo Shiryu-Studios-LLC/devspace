@@ -67,7 +67,7 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [x] Hardware/device connect/disconnect/state-change events in the bounded activity timeline.
 - [x] Network interface/route/service awareness (read-only Linux interfaces, addresses, routes, DNS, listeners, and Cloudflare Tunnel process state).
 - [ ] Authorized filesystem watchers.
-- [ ] Application log/tracing correlation. Explicit Linux user-journal source discovery and bounded source reads are implemented; activity/log correlation is next.
+- [x] Application log/tracing correlation for `pid:<pid>` activity IDs, combining bounded timeline events with explicit bounded Linux user-journal reads. Journal source discovery and source-specific reads are also available.
 - [ ] Browser-session integration where explicitly authorized.
 
 ## Event and correlation layer

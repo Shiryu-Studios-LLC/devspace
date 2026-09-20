@@ -309,6 +309,13 @@ export interface DesktopLogReadResult {
   entries: DesktopLogEntry[];
 }
 
+export interface DesktopTraceCorrelation {
+  correlationId: string;
+  generatedAt: string;
+  events: DesktopActivityEvent[];
+  logs?: DesktopLogReadResult;
+}
+
 export type DesktopAgentMethod =
   | "hello"
   | "desktop.status"
@@ -322,6 +329,7 @@ export type DesktopAgentMethod =
   | "network.snapshot"
   | "logs.sources"
   | "logs.read"
+  | "trace.correlate"
   | "desktop.stop";
 
 type DesktopAgentRequestBase = {
@@ -330,7 +338,7 @@ type DesktopAgentRequestBase = {
   authToken: string;
 };
 
-type DesktopAgentNoParamsMethod = Exclude<DesktopAgentMethod, "logs.read">;
+type DesktopAgentNoParamsMethod = Exclude<DesktopAgentMethod, "logs.read" | "trace.correlate">;
 
 export type DesktopAgentRequest = DesktopAgentRequestBase & (
   | {
@@ -341,6 +349,14 @@ export type DesktopAgentRequest = DesktopAgentRequestBase & (
       method: "logs.read";
       params: {
         sourceId: string;
+        lines?: number;
+        query?: string;
+      };
+    }
+  | {
+      method: "trace.correlate";
+      params: {
+        correlationId: string;
         lines?: number;
         query?: string;
       };
@@ -407,6 +423,22 @@ export function decodeDesktopAgentRequest(value: unknown): DesktopAgentRequest {
       authToken,
       method,
       params: { sourceId, ...(lines === undefined ? {} : { lines }), ...(query === undefined ? {} : { query }) },
+    };
+  }
+  if (method === "trace.correlate") {
+    const correlationId = requiredString(params.correlationId, "trace.correlationId");
+    const lines = params.lines === undefined ? undefined : requiredInteger(params.lines, "trace.lines");
+    const query = params.query === undefined ? undefined : requiredString(params.query, "trace.query");
+    const allowed = new Set(["correlationId", "lines", "query"]);
+    if (Object.keys(params).some((key) => !allowed.has(key))) {
+      throw new DesktopAgentProtocolError("INVALID_PARAMS", "trace.correlate received unknown parameters.");
+    }
+    return {
+      requestId,
+      protocolVersion,
+      authToken,
+      method,
+      params: { correlationId, ...(lines === undefined ? {} : { lines }), ...(query === undefined ? {} : { query }) },
     };
   }
   if (Object.keys(params).length !== 0) {
@@ -552,6 +584,19 @@ export function decodeDesktopLogReadResult(value: unknown): DesktopLogReadResult
     generatedAt: requiredString(record.generatedAt, "logs.generatedAt"),
     query: optionalString(record.query),
     entries: record.entries.map(decodeDesktopLogEntry),
+  };
+}
+
+export function decodeDesktopTraceCorrelation(value: unknown): DesktopTraceCorrelation {
+  const record = asRecord(value);
+  if (!record || !Array.isArray(record.events)) {
+    throw new DesktopAgentProtocolError("INVALID_TRACE", "Desktop agent returned an invalid trace correlation result.");
+  }
+  return {
+    correlationId: requiredString(record.correlationId, "trace.correlationId"),
+    generatedAt: requiredString(record.generatedAt, "trace.generatedAt"),
+    events: record.events.map(decodeDesktopActivityEvent),
+    logs: record.logs === undefined ? undefined : decodeDesktopLogReadResult(record.logs),
   };
 }
 
@@ -914,6 +959,7 @@ function isDesktopAgentMethod(value: string): value is DesktopAgentMethod {
     || value === "network.snapshot"
     || value === "logs.sources"
     || value === "logs.read"
+    || value === "trace.correlate"
     || value === "desktop.stop";
 }
 

@@ -16,6 +16,7 @@ import {
   linuxLogAwarenessAvailable,
   listLinuxLogSources,
   readLinuxLogs,
+  readLinuxLogsForPid,
 } from "./desktop-logs-linux.js";
 import { appendFileSync, chmodSync, rmSync } from "node:fs";
 import { createServer, type Server as NetServer, type Socket } from "node:net";
@@ -42,6 +43,7 @@ import {
   type DesktopNetworkSnapshot,
   type DesktopLogReadResult,
   type DesktopLogSource,
+  type DesktopTraceCorrelation,
   type DesktopProcessInfo,
   type DesktopWindowInfo,
 } from "./desktop-agent-protocol.js";
@@ -73,6 +75,7 @@ export interface DesktopAgentDaemonOptions {
   networkSnapshot?: () => Promise<DesktopNetworkSnapshot>;
   logSources?: () => Promise<DesktopLogSource[]>;
   readLogs?: (sourceId: string, options?: { lines?: number; query?: string }) => Promise<DesktopLogReadResult>;
+  readLogsForPid?: (pid: number, options?: { lines?: number; query?: string }) => Promise<DesktopLogReadResult>;
   activityMonitor?: DesktopActivityMonitor;
   now?: () => number;
   onClosed?: () => void;
@@ -90,6 +93,7 @@ export class DesktopAgentDaemon {
   private readonly networkSnapshotProvider: () => Promise<DesktopNetworkSnapshot>;
   private readonly logSourcesProvider: () => Promise<DesktopLogSource[]>;
   private readonly readLogsProvider: (sourceId: string, options?: { lines?: number; query?: string }) => Promise<DesktopLogReadResult>;
+  private readonly readLogsForPidProvider: (pid: number, options?: { lines?: number; query?: string }) => Promise<DesktopLogReadResult>;
   private readonly activityMonitor: DesktopActivityMonitor;
   private readonly now: () => number;
   private readonly onClosed?: () => void;
@@ -113,6 +117,7 @@ export class DesktopAgentDaemon {
     this.networkSnapshotProvider = options.networkSnapshot ?? getLinuxNetworkSnapshot;
     this.logSourcesProvider = options.logSources ?? listLinuxLogSources;
     this.readLogsProvider = options.readLogs ?? readLinuxLogs;
+    this.readLogsForPidProvider = options.readLogsForPid ?? readLinuxLogsForPid;
     this.activityMonitor = options.activityMonitor ?? new DesktopActivityMonitor({
       windows: this.windowsProvider,
       displays: this.displaysProvider,
@@ -385,6 +390,30 @@ export class DesktopAgentDaemon {
           query: request.params.query,
         });
       }
+      case "trace.correlate": {
+        const tracingCapability = this.capabilitiesProvider().find((capability) => capability.id === "tracing");
+        if (tracingCapability?.state !== "ready") {
+          throw new DesktopAgentProtocolError(
+            "DESKTOP_TRACING_UNAVAILABLE",
+            tracingCapability?.detail ?? "Tracing correlation is unavailable.",
+          );
+        }
+        const correlationId = request.params.correlationId;
+        const events = this.activityMonitor.recent(1_000).filter((event) => event.correlationId === correlationId);
+        const pidMatch = /^pid:(\d+)$/.exec(correlationId);
+        let logs: DesktopLogReadResult | undefined;
+        if (pidMatch) {
+          const pid = Number(pidMatch[1]);
+          logs = await this.readLogsForPidProvider(pid, { lines: request.params.lines, query: request.params.query });
+        }
+        const result: DesktopTraceCorrelation = {
+          correlationId,
+          generatedAt: new Date(this.now()).toISOString(),
+          events,
+          logs,
+        };
+        return result;
+      }
       case "desktop.stop":
         this.stopping = true;
         return this.status();
@@ -427,6 +456,7 @@ export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
   const networkReady = linuxNetworkAwarenessAvailable();
   const logsReady = linuxLogAwarenessAvailable();
   const eventsReady = windowsReady || displaysReady || processesReady || audioReady || devicesReady || networkReady;
+  const tracingReady = logsReady && eventsReady;
   return [
     windowsReady
       ? { id: "windows", state: "ready", detail: "KDE/KWin D-Bus window inventory" }
@@ -454,6 +484,9 @@ export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
     logsReady
       ? { id: "logs", state: "ready", detail: "Explicit-source bounded reads from the Linux user journal; no arbitrary filesystem paths" }
       : { id: "logs", state: "unavailable", detail: "Linux user journal is unavailable" },
+    tracingReady
+      ? { id: "tracing", state: "ready", detail: "Correlates bounded activity timeline entries with recent user-journal messages for pid:<pid> correlation IDs" }
+      : { id: "tracing", state: "unavailable", detail: "Tracing requires both activity events and Linux user-journal access" },
     eventsReady
       ? { id: "events", state: "ready", detail: "Bounded in-memory process/window/display/audio/device/network activity timeline" }
       : { id: "events", state: "unavailable", detail: "No activity sources are available" },

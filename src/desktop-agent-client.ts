@@ -19,6 +19,7 @@ import {
   decodeDesktopNetworkSnapshot,
   decodeDesktopLogReadResult,
   decodeDesktopLogSources,
+  decodeDesktopTraceCorrelation,
   decodeDesktopProcessList,
   decodeDesktopWindowList,
   encodeDesktopAgentRequest,
@@ -34,6 +35,7 @@ import {
   type DesktopNetworkSnapshot,
   type DesktopLogReadResult,
   type DesktopLogSource,
+  type DesktopTraceCorrelation,
   type DesktopProcessInfo,
   type DesktopWindowInfo,
 } from "./desktop-agent-protocol.js";
@@ -144,6 +146,15 @@ export class DesktopAgentClient {
     await this.ensureReady();
     return decodeDesktopLogReadResult(await this.requestExisting("logs.read", {
       sourceId,
+      ...(options.lines === undefined ? {} : { lines: options.lines }),
+      ...(options.query === undefined ? {} : { query: options.query }),
+    }));
+  }
+
+  async traceCorrelation(correlationId: string, options: { lines?: number; query?: string } = {}): Promise<DesktopTraceCorrelation> {
+    await this.ensureReady();
+    return decodeDesktopTraceCorrelation(await this.requestExisting("trace.correlate", {
+      correlationId,
       ...(options.lines === undefined ? {} : { lines: options.lines }),
       ...(options.query === undefined ? {} : { query: options.query }),
     }));

@@ -14,6 +14,7 @@ import {
   decodeDesktopNetworkSnapshot,
   decodeDesktopLogReadResult,
   decodeDesktopLogSources,
+  decodeDesktopTraceCorrelation,
   decodeDesktopProcessList,
   decodeDesktopWindowList,
   encodeDesktopAgentRequest,
@@ -117,6 +118,17 @@ test("desktop agent accepts log source listing and bounded log reads", () => {
   };
   assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(readRequest))), readRequest);
   assert.throws(() => decodeDesktopAgentRequest({ ...readRequest, params: { ...readRequest.params, path: "/tmp/x" } }), /unknown parameters/);
+});
+
+test("desktop agent accepts correlation requests", () => {
+  const request: DesktopAgentRequest = {
+    requestId: "request-trace",
+    protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
+    authToken: "a".repeat(64),
+    method: "trace.correlate",
+    params: { correlationId: "pid:9460", lines: 50, query: "http_request" },
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
 });
 
 test("desktop agent accepts the read-only audio graph method", () => {
@@ -414,6 +426,31 @@ test("desktop agent decodes log sources and explicit bounded log reads", () => {
   });
   assert.equal(logs.entries[0]?.pid, 2237);
   assert.equal(logs.entries[0]?.message, "render completed");
+});
+
+test("desktop agent decodes correlated activity and journal entries", () => {
+  const trace = decodeDesktopTraceCorrelation({
+    correlationId: "pid:9460",
+    generatedAt: "2026-09-20T03:05:00.000Z",
+    events: [{
+      sequence: 10,
+      timestamp: "2026-09-20T03:04:59.000Z",
+      type: "network.listener.opened",
+      sourceModule: "network",
+      entityId: "tcp|127.0.0.1|7676|||node|9460",
+      correlationId: "pid:9460",
+      applicationId: "node",
+      pid: 9460,
+      summary: "Network listener opened.",
+    }],
+    logs: {
+      sourceId: "pid:9460",
+      generatedAt: "2026-09-20T03:05:00.000Z",
+      entries: [{ timestamp: "2026-09-20T03:04:59.500Z", pid: 9460, processName: "node", message: "http_request" }],
+    },
+  });
+  assert.equal(trace.events[0]?.correlationId, "pid:9460");
+  assert.equal(trace.logs?.entries[0]?.pid, 9460);
 });
 
 test("desktop agent response and status decode capability states", () => {

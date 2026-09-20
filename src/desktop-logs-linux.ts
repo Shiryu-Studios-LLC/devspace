@@ -71,6 +71,35 @@ export async function listLinuxLogSources(): Promise<DesktopLogSource[]> {
     .sort((a, b) => (b.lastSeen ?? "").localeCompare(a.lastSeen ?? "") || a.label.localeCompare(b.label));
 }
 
+export async function readLinuxLogsForPid(
+  pid: number,
+  options: { lines?: number; query?: string } = {},
+): Promise<DesktopLogReadResult> {
+  if (!linuxLogAwarenessAvailable()) throw new Error("Linux journal awareness is unavailable.");
+  if (!Number.isSafeInteger(pid) || pid < 1) throw new Error("PID must be a positive integer.");
+  const lines = normalizeLineCount(options.lines);
+  const query = normalizeQuery(options.query);
+  const records = await readJournalRecords([
+    "--user",
+    "-n",
+    String(lines),
+    "-o",
+    "json",
+    "--no-pager",
+    `_PID=${pid}`,
+  ]);
+  const entries = records
+    .map(normalizeJournalEntry)
+    .filter((entry): entry is DesktopLogEntry => entry !== undefined)
+    .filter((entry) => !query || entry.message.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
+  return {
+    sourceId: `pid:${pid}`,
+    generatedAt: new Date().toISOString(),
+    query,
+    entries,
+  };
+}
+
 export async function readLinuxLogs(
   sourceId: string,
   options: { lines?: number; query?: string } = {},
