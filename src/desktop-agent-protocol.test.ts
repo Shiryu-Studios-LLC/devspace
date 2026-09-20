@@ -8,6 +8,7 @@ import {
   decodeDesktopAgentResponse,
   decodeDesktopActivityTimeline,
   decodeDesktopAgentStatus,
+  decodeDesktopAudioGraph,
   decodeDesktopDisplayList,
   decodeDesktopProcessList,
   decodeDesktopWindowList,
@@ -66,6 +67,17 @@ test("desktop agent accepts the recent activity method", () => {
     protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
     authToken: "a".repeat(64),
     method: "events.recent",
+    params: {},
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
+});
+
+test("desktop agent accepts the read-only audio graph method", () => {
+  const request: DesktopAgentRequest = {
+    requestId: "request-audio",
+    protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
+    authToken: "a".repeat(64),
+    method: "audio.graph",
     params: {},
   };
   assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
@@ -193,6 +205,53 @@ test("desktop agent decodes a recent activity timeline", () => {
   assert.equal(timeline.cursor, 12);
   assert.equal(timeline.events[0]?.type, "window.created");
   assert.equal(timeline.events[0]?.correlationId, "pid:2501");
+});
+
+test("desktop agent decodes a structured PipeWire audio graph", () => {
+  const graph = decodeDesktopAudioGraph({
+    generatedAt: "2026-09-20T02:00:00.000Z",
+    nodes: [{
+      id: 91,
+      name: "shiryu.input.1.clean",
+      mediaClass: "Audio/Source",
+      state: "running",
+      description: "Shiryu Microphone 1",
+      applicationName: "Shiryu Audio",
+      sampleRate: 48000,
+      isStream: false,
+      isSink: false,
+      isSource: true,
+    }, {
+      id: 200,
+      name: "WEBRTC VoiceEngine",
+      mediaClass: "Stream/Input/Audio",
+      state: "running",
+      applicationName: "WEBRTC VoiceEngine",
+      applicationBinary: "Discord",
+      pid: 1800836,
+      targetObject: "shiryu.input.1.clean",
+      sampleRate: 48000,
+      isStream: true,
+      isSink: false,
+      isSource: false,
+    }],
+    ports: [{ id: 210, nodeId: 91, name: "capture_FL", direction: "out", channel: "FL" }],
+    links: [{
+      id: 88,
+      state: "active",
+      outputNodeId: 91,
+      outputPortId: 210,
+      inputNodeId: 200,
+      inputPortId: 174,
+      outputNodeName: "Shiryu Microphone 1",
+      inputNodeName: "WEBRTC VoiceEngine",
+      outputPortName: "capture_FL",
+      inputPortName: "input_FL",
+    }],
+  });
+  assert.equal(graph.nodes[1]?.applicationBinary, "Discord");
+  assert.equal(graph.links[0]?.outputNodeName, "Shiryu Microphone 1");
+  assert.equal(graph.links[0]?.inputNodeName, "WEBRTC VoiceEngine");
 });
 
 test("desktop agent response and status decode capability states", () => {

@@ -1,5 +1,9 @@
 import { timingSafeEqual } from "node:crypto";
 import { DesktopActivityMonitor } from "./desktop-activity-monitor.js";
+import {
+  getPipeWireAudioGraph,
+  pipeWireAudioAwarenessAvailable,
+} from "./desktop-audio-pipewire.js";
 import { appendFileSync, chmodSync, rmSync } from "node:fs";
 import { createServer, type Server as NetServer, type Socket } from "node:net";
 import {
@@ -18,6 +22,7 @@ import {
   DesktopAgentProtocolError,
   type DesktopAgentRequest,
   type DesktopAgentStatus,
+  type DesktopAudioGraph,
   type DesktopCapabilityStatus,
   type DesktopDisplayInfo,
   type DesktopProcessInfo,
@@ -46,6 +51,7 @@ export interface DesktopAgentDaemonOptions {
   windows?: () => Promise<DesktopWindowInfo[]>;
   displays?: () => Promise<DesktopDisplayInfo[]>;
   processes?: () => Promise<DesktopProcessInfo[]>;
+  audioGraph?: () => Promise<DesktopAudioGraph>;
   activityMonitor?: DesktopActivityMonitor;
   now?: () => number;
   onClosed?: () => void;
@@ -58,6 +64,7 @@ export class DesktopAgentDaemon {
   private readonly windowsProvider: () => Promise<DesktopWindowInfo[]>;
   private readonly displaysProvider: () => Promise<DesktopDisplayInfo[]>;
   private readonly processesProvider: () => Promise<DesktopProcessInfo[]>;
+  private readonly audioGraphProvider: () => Promise<DesktopAudioGraph>;
   private readonly activityMonitor: DesktopActivityMonitor;
   private readonly now: () => number;
   private readonly onClosed?: () => void;
@@ -76,6 +83,7 @@ export class DesktopAgentDaemon {
     this.windowsProvider = options.windows ?? listKdeWindows;
     this.displaysProvider = options.displays ?? listKdeDisplays;
     this.processesProvider = options.processes ?? defaultProcessInventory;
+    this.audioGraphProvider = options.audioGraph ?? getPipeWireAudioGraph;
     this.activityMonitor = options.activityMonitor ?? new DesktopActivityMonitor({
       windows: this.windowsProvider,
       displays: this.displaysProvider,
@@ -292,6 +300,16 @@ export class DesktopAgentDaemon {
           events: this.activityMonitor.recent(),
         };
       }
+      case "audio.graph": {
+        const audioCapability = this.capabilitiesProvider().find((capability) => capability.id === "audio");
+        if (audioCapability?.state !== "ready") {
+          throw new DesktopAgentProtocolError(
+            "DESKTOP_AUDIO_UNAVAILABLE",
+            audioCapability?.detail ?? "Audio awareness is unavailable.",
+          );
+        }
+        return this.audioGraphProvider();
+      }
       case "desktop.stop":
         this.stopping = true;
         return this.status();
@@ -329,6 +347,7 @@ export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
   const windowsReady = kdeWindowAwarenessAvailable();
   const displaysReady = kdeDisplayAwarenessAvailable();
   const processesReady = linuxProcessAwarenessAvailable();
+  const audioReady = pipeWireAudioAwarenessAvailable();
   const eventsReady = windowsReady || displaysReady || processesReady;
   return [
     windowsReady
@@ -345,7 +364,9 @@ export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
     { id: "accessibility", state: "not_implemented" },
     { id: "clipboard", state: "not_implemented" },
     { id: "notifications", state: "not_implemented" },
-    { id: "audio", state: "not_implemented" },
+    audioReady
+      ? { id: "audio", state: "ready", detail: "Read-only PipeWire audio nodes, ports, and routing links" }
+      : { id: "audio", state: "unavailable", detail: "PipeWire user-session graph is unavailable" },
     { id: "devices", state: "not_implemented" },
     { id: "network", state: "not_implemented" },
     eventsReady

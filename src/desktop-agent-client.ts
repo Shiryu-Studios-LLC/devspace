@@ -12,6 +12,7 @@ import {
 import {
   decodeDesktopActivityTimeline,
   decodeDesktopAgentResponse,
+  decodeDesktopAudioGraph,
   decodeDesktopAgentStatus,
   decodeDesktopDisplayList,
   decodeDesktopProcessList,
@@ -19,6 +20,7 @@ import {
   encodeDesktopAgentRequest,
   type DesktopActivityTimeline,
   type DesktopAgentMethod,
+  type DesktopAudioGraph,
   type DesktopAgentRequest,
   type DesktopAgentResponse,
   type DesktopAgentStatus,
@@ -108,6 +110,11 @@ export class DesktopAgentClient {
   async recentActivity(): Promise<DesktopActivityTimeline> {
     await this.ensureReady();
     return decodeDesktopActivityTimeline(await this.requestExisting("events.recent"));
+  }
+
+  async audioGraph(): Promise<DesktopAudioGraph> {
+    await this.ensureReady();
+    return decodeDesktopAudioGraph(await this.requestExisting("audio.graph"));
   }
 
   async stop(): Promise<DesktopAgentStatus | undefined> {

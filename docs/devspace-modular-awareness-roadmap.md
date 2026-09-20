@@ -61,7 +61,8 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [ ] Keyboard/mouse input control.
 - [ ] Clipboard read/write with explicit permissions.
 - [ ] Desktop notification awareness/actions.
-- [ ] PipeWire audio graph, routes, streams, and meters.
+- [x] Read-only PipeWire audio graph, application streams, channel ports, and active route links.
+- [ ] PipeWire live meters and richer runtime stream telemetry.
 - [ ] Hardware/device hotplug awareness.
 - [ ] Network interface/route/service awareness.
 - [ ] Authorized filesystem watchers.

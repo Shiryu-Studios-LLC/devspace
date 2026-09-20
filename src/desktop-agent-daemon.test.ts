@@ -251,6 +251,86 @@ test("desktop agent serves the bounded recent activity timeline", async (t) => {
   assert.equal(activity.events[0]?.correlationId, "pid:200");
 });
 
+test("desktop agent serves a structured read-only PipeWire audio graph", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-audio-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const expectedGraph = {
+    generatedAt: "2026-09-20T02:00:00.000Z",
+    nodes: [{
+      id: 91,
+      name: "shiryu.input.1.clean",
+      mediaClass: "Audio/Source",
+      state: "running",
+      nick: undefined,
+      description: "Shiryu Microphone 1",
+      applicationName: "Shiryu Audio",
+      applicationBinary: undefined,
+      pid: undefined,
+      clientId: undefined,
+      deviceId: undefined,
+      mediaName: undefined,
+      targetObject: undefined,
+      sampleRate: 48000,
+      latency: undefined,
+      isStream: false,
+      isSink: false,
+      isSource: true,
+    }, {
+      id: 200,
+      name: "WEBRTC VoiceEngine",
+      mediaClass: "Stream/Input/Audio",
+      state: "running",
+      nick: undefined,
+      description: undefined,
+      applicationName: "WEBRTC VoiceEngine",
+      applicationBinary: "Discord",
+      pid: 1800836,
+      clientId: undefined,
+      deviceId: undefined,
+      mediaName: undefined,
+      targetObject: "shiryu.input.1.clean",
+      sampleRate: 48000,
+      latency: undefined,
+      isStream: true,
+      isSink: false,
+      isSource: false,
+    }],
+    ports: [{
+      id: 210,
+      nodeId: 91,
+      name: "capture_FL",
+      direction: "out" as const,
+      alias: undefined,
+      channel: "FL",
+    }],
+    links: [{
+      id: 88,
+      state: "active",
+      outputNodeId: 91,
+      outputPortId: 210,
+      inputNodeId: 200,
+      inputPortId: 174,
+      outputNodeName: "Shiryu Microphone 1",
+      inputNodeName: "WEBRTC VoiceEngine",
+      outputPortName: "capture_FL",
+      inputPortName: "input_FL",
+    }],
+  };
+  const daemon = new DesktopAgentDaemon({
+    stateDir,
+    capabilities: () => [{ id: "audio", state: "ready" }],
+    audioGraph: async () => expectedGraph,
+  });
+  t.after(() => daemon.close());
+  await daemon.start();
+  const client = new DesktopAgentClient({
+    stateDir,
+    spawnDaemon: () => assert.fail("existing daemon should not be respawned"),
+  });
+
+  assert.deepEqual(await client.audioGraph(), expectedGraph);
+});
+
 test("desktop agent client can auto-start and stop an isolated daemon", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-autostart-"));
   t.after(() => rm(stateDir, { recursive: true, force: true }));

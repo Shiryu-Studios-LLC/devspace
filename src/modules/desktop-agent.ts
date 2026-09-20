@@ -9,6 +9,7 @@ import {
 import type {
   DesktopActivityTimeline,
   DesktopAgentStatus,
+  DesktopAudioGraph,
   DesktopCapabilityStatus,
   DesktopDisplayInfo,
   DesktopProcessInfo,
@@ -315,6 +316,78 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
 
   registerAppTool(
     server,
+    "desktop_audio_graph",
+    {
+      title: "Desktop Audio Graph",
+      description:
+        "Read the current PipeWire audio graph from the isolated desktop agent: audio devices/endpoints, application streams, channel ports, and routing links. Read-only; this does not change routes, volume, mute, or devices.",
+      inputSchema: {},
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        graph: z.object({
+          generatedAt: z.string(),
+          nodes: z.array(z.object({
+            id: z.number().int(),
+            name: z.string(),
+            mediaClass: z.string(),
+            state: z.string().optional(),
+            nick: z.string().optional(),
+            description: z.string().optional(),
+            applicationName: z.string().optional(),
+            applicationBinary: z.string().optional(),
+            pid: z.number().int().optional(),
+            clientId: z.number().int().optional(),
+            deviceId: z.number().int().optional(),
+            mediaName: z.string().optional(),
+            targetObject: z.string().optional(),
+            sampleRate: z.number().int().optional(),
+            latency: z.string().optional(),
+            isStream: z.boolean(),
+            isSink: z.boolean(),
+            isSource: z.boolean(),
+          })),
+          ports: z.array(z.object({
+            id: z.number().int(),
+            nodeId: z.number().int(),
+            name: z.string(),
+            direction: z.enum(["in", "out"]),
+            alias: z.string().optional(),
+            channel: z.string().optional(),
+          })),
+          links: z.array(z.object({
+            id: z.number().int(),
+            state: z.string(),
+            outputNodeId: z.number().int(),
+            outputPortId: z.number().int(),
+            inputNodeId: z.number().int(),
+            inputPortId: z.number().int(),
+            outputNodeName: z.string(),
+            inputNodeName: z.string(),
+            outputPortName: z.string().optional(),
+            inputPortName: z.string().optional(),
+          })),
+        }).optional(),
+      },
+      _meta: {},
+      annotations: readAnnotations,
+    },
+    async () => {
+      try {
+        const graph = await client.audioGraph();
+        const result = formatAudioSummary(graph);
+        return {
+          content: [{ type: "text" as const, text: result }],
+          structuredContent: { status: "ready" as const, result, graph },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
     "desktop_agent_stop",
     {
       title: "Stop Desktop Agent",
@@ -379,6 +452,13 @@ function describeStatus(status: DesktopAgentStatus): string {
     `session ${status.sessionType}`,
     `protocol ${status.protocolVersion}`,
   ].join("; ");
+}
+
+function formatAudioSummary(graph: DesktopAudioGraph): string {
+  const streams = graph.nodes.filter((node) => node.isStream);
+  const sinks = graph.nodes.filter((node) => node.isSink);
+  const sources = graph.nodes.filter((node) => node.isSource);
+  return `PipeWire audio graph: ${graph.nodes.length} audio node(s), ${streams.length} stream(s), ${sinks.length} sink(s), ${sources.length} source(s), ${graph.links.length} route link(s).`;
 }
 
 function formatActivitySummary(activity: DesktopActivityTimeline): string {

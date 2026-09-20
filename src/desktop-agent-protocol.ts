@@ -131,6 +131,56 @@ export interface DesktopActivityTimeline {
   events: DesktopActivityEvent[];
 }
 
+export interface DesktopAudioNode {
+  id: number;
+  name: string;
+  mediaClass: string;
+  state?: string;
+  nick?: string;
+  description?: string;
+  applicationName?: string;
+  applicationBinary?: string;
+  pid?: number;
+  clientId?: number;
+  deviceId?: number;
+  mediaName?: string;
+  targetObject?: string;
+  sampleRate?: number;
+  latency?: string;
+  isStream: boolean;
+  isSink: boolean;
+  isSource: boolean;
+}
+
+export interface DesktopAudioPort {
+  id: number;
+  nodeId: number;
+  name: string;
+  direction: "in" | "out";
+  alias?: string;
+  channel?: string;
+}
+
+export interface DesktopAudioLink {
+  id: number;
+  state: string;
+  outputNodeId: number;
+  outputPortId: number;
+  inputNodeId: number;
+  inputPortId: number;
+  outputNodeName: string;
+  inputNodeName: string;
+  outputPortName?: string;
+  inputPortName?: string;
+}
+
+export interface DesktopAudioGraph {
+  generatedAt: string;
+  nodes: DesktopAudioNode[];
+  ports: DesktopAudioPort[];
+  links: DesktopAudioLink[];
+}
+
 export type DesktopAgentMethod =
   | "hello"
   | "desktop.status"
@@ -139,6 +189,7 @@ export type DesktopAgentMethod =
   | "displays.list"
   | "processes.list"
   | "events.recent"
+  | "audio.graph"
   | "desktop.stop";
 
 export type DesktopAgentRequest = {
@@ -276,6 +327,19 @@ export function decodeDesktopActivityTimeline(value: unknown): DesktopActivityTi
   };
 }
 
+export function decodeDesktopAudioGraph(value: unknown): DesktopAudioGraph {
+  const record = asRecord(value);
+  if (!record || !Array.isArray(record.nodes) || !Array.isArray(record.ports) || !Array.isArray(record.links)) {
+    throw new DesktopAgentProtocolError("INVALID_AUDIO", "Desktop agent returned an invalid audio graph.");
+  }
+  return {
+    generatedAt: requiredString(record.generatedAt, "audio.generatedAt"),
+    nodes: record.nodes.map(decodeDesktopAudioNode),
+    ports: record.ports.map(decodeDesktopAudioPort),
+    links: record.links.map(decodeDesktopAudioLink),
+  };
+}
+
 export function desktopAgentProtocolVersion(): number {
   return DESKTOP_AGENT_PROTOCOL_VERSION;
 }
@@ -404,6 +468,65 @@ function decodeDesktopActivityEvent(value: unknown): DesktopActivityEvent {
   };
 }
 
+function decodeDesktopAudioNode(value: unknown): DesktopAudioNode {
+  const record = asRecord(value);
+  if (!record) throw new DesktopAgentProtocolError("INVALID_AUDIO", "Desktop audio node must be an object.");
+  return {
+    id: requiredInteger(record.id, "audio.node.id"),
+    name: requiredString(record.name, "audio.node.name"),
+    mediaClass: requiredString(record.mediaClass, "audio.node.mediaClass"),
+    state: optionalString(record.state),
+    nick: optionalString(record.nick),
+    description: optionalString(record.description),
+    applicationName: optionalString(record.applicationName),
+    applicationBinary: optionalString(record.applicationBinary),
+    pid: optionalInteger(record.pid),
+    clientId: optionalInteger(record.clientId),
+    deviceId: optionalInteger(record.deviceId),
+    mediaName: optionalString(record.mediaName),
+    targetObject: optionalString(record.targetObject),
+    sampleRate: optionalInteger(record.sampleRate),
+    latency: optionalString(record.latency),
+    isStream: requiredBoolean(record.isStream, "audio.node.isStream"),
+    isSink: requiredBoolean(record.isSink, "audio.node.isSink"),
+    isSource: requiredBoolean(record.isSource, "audio.node.isSource"),
+  };
+}
+
+function decodeDesktopAudioPort(value: unknown): DesktopAudioPort {
+  const record = asRecord(value);
+  if (!record) throw new DesktopAgentProtocolError("INVALID_AUDIO", "Desktop audio port must be an object.");
+  const direction = requiredString(record.direction, "audio.port.direction");
+  if (direction !== "in" && direction !== "out") {
+    throw new DesktopAgentProtocolError("INVALID_AUDIO", `Invalid audio port direction: ${direction}`);
+  }
+  return {
+    id: requiredInteger(record.id, "audio.port.id"),
+    nodeId: requiredInteger(record.nodeId, "audio.port.nodeId"),
+    name: requiredString(record.name, "audio.port.name"),
+    direction,
+    alias: optionalString(record.alias),
+    channel: optionalString(record.channel),
+  };
+}
+
+function decodeDesktopAudioLink(value: unknown): DesktopAudioLink {
+  const record = asRecord(value);
+  if (!record) throw new DesktopAgentProtocolError("INVALID_AUDIO", "Desktop audio link must be an object.");
+  return {
+    id: requiredInteger(record.id, "audio.link.id"),
+    state: requiredString(record.state, "audio.link.state"),
+    outputNodeId: requiredInteger(record.outputNodeId, "audio.link.outputNodeId"),
+    outputPortId: requiredInteger(record.outputPortId, "audio.link.outputPortId"),
+    inputNodeId: requiredInteger(record.inputNodeId, "audio.link.inputNodeId"),
+    inputPortId: requiredInteger(record.inputPortId, "audio.link.inputPortId"),
+    outputNodeName: requiredString(record.outputNodeName, "audio.link.outputNodeName"),
+    inputNodeName: requiredString(record.inputNodeName, "audio.link.inputNodeName"),
+    outputPortName: optionalString(record.outputPortName),
+    inputPortName: optionalString(record.inputPortName),
+  };
+}
+
 function decodeCapabilityStatus(value: unknown): DesktopCapabilityStatus {
   const record = asRecord(value);
   const state = requiredString(record?.state, "capability.state");
@@ -425,6 +548,7 @@ function isDesktopAgentMethod(value: string): value is DesktopAgentMethod {
     || value === "displays.list"
     || value === "processes.list"
     || value === "events.recent"
+    || value === "audio.graph"
     || value === "desktop.stop";
 }
 
