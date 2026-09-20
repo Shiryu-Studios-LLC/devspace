@@ -1,4 +1,5 @@
-import { unwatchFile, watchFile } from "node:fs";
+import { unwatchFile, watch, watchFile, type FSWatcher } from "node:fs";
+import { basename, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { DevSpaceModule } from "./types.js";
 
@@ -71,14 +72,27 @@ export function watchHotModuleBundle(options: HotModuleBundleWatcherOptions): ()
       current.mtimeMs === previous.mtimeMs
       && current.ctimeMs === previous.ctimeMs
       && current.size === previous.size
+      && current.ino === previous.ino
     ) return;
     schedule();
   });
+
+  let nativeWatcher: FSWatcher | undefined;
+  try {
+    const targetName = basename(options.bundlePath);
+    nativeWatcher = watch(dirname(options.bundlePath), { persistent: false }, (_eventType, filename) => {
+      if (filename === null || filename.toString() === targetName) schedule();
+    });
+    nativeWatcher.on("error", (error) => options.onError?.(error));
+  } catch (error) {
+    options.onError?.(error);
+  }
 
   return () => {
     closed = true;
     if (timer) clearTimeout(timer);
     timer = undefined;
+    nativeWatcher?.close();
     unwatchFile(options.bundlePath);
   };
 }
