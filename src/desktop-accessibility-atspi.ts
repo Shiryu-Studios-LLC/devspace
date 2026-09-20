@@ -3,7 +3,10 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
+  decodeDesktopAccessibilityActionResult,
   decodeDesktopAccessibilitySnapshot,
+  type DesktopAccessibilityActionRequest,
+  type DesktopAccessibilityActionResult,
   type DesktopAccessibilitySnapshot,
 } from "./desktop-agent-protocol.js";
 
@@ -34,20 +37,47 @@ export function atspiAccessibilityAvailable(helperPath = DEFAULT_HELPER_PATH): b
     && Boolean(process.env.WAYLAND_DISPLAY || process.env.DISPLAY);
 }
 
+export function createAtspiAccessibilityActionProvider(
+  options: AtspiAccessibilityOptions = {},
+): (request: DesktopAccessibilityActionRequest) => Promise<DesktopAccessibilityActionResult> {
+  const helperPath = options.helperPath ?? DEFAULT_HELPER_PATH;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const runHelper = createHelperRunner(helperPath, options.runHelper);
+  return async (request) => {
+    if (!options.runHelper && !atspiAccessibilityAvailable(helperPath)) {
+      throw new Error("AT-SPI accessibility actions are unavailable in this desktop session.");
+    }
+    if (!/^pid-\d+(?:\.\d+)*$/.test(request.nodeId)) {
+      throw new Error("Accessibility action requires a pid-based node ID from a recent snapshot.");
+    }
+    if (!Number.isSafeInteger(request.actionIndex) || request.actionIndex < 0 || request.actionIndex > 63) {
+      throw new Error("Accessibility actionIndex must be an integer between 0 and 63.");
+    }
+    const args = [
+      "action",
+      "--node-id",
+      request.nodeId,
+      "--action-index",
+      String(request.actionIndex),
+      "--expected-role",
+      request.expectedRole,
+      "--expected-name",
+      request.expectedName,
+      ...(request.expectedAccessibleId === undefined ? [] : ["--expected-accessible-id", request.expectedAccessibleId]),
+    ];
+    const { stdout } = await runHelper(args, { timeout: timeoutMs, env: process.env });
+    const line = stdout.trim().split(/\r?\n/).filter(Boolean).at(-1);
+    if (!line) throw new Error("AT-SPI helper returned no accessibility action result.");
+    return decodeDesktopAccessibilityActionResult(JSON.parse(line));
+  };
+}
+
 export function createAtspiAccessibilityProvider(
   options: AtspiAccessibilityOptions = {},
 ): (request?: DesktopAccessibilitySnapshotOptions) => Promise<DesktopAccessibilitySnapshot> {
   const helperPath = options.helperPath ?? DEFAULT_HELPER_PATH;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const runHelper = options.runHelper ?? (async (args, runOptions) => {
-    const result = await execFileAsync(PYTHON, [helperPath, ...args], {
-      encoding: "utf8",
-      maxBuffer: 8 * 1024 * 1024,
-      timeout: runOptions.timeout,
-      env: runOptions.env,
-    });
-    return { stdout: result.stdout };
-  });
+  const runHelper = createHelperRunner(helperPath, options.runHelper);
 
   return async (request = {}) => {
     if (!options.runHelper && !atspiAccessibilityAvailable(helperPath)) {
@@ -74,4 +104,19 @@ export function createAtspiAccessibilityProvider(
     if (!line) throw new Error("AT-SPI helper returned no accessibility snapshot.");
     return decodeDesktopAccessibilitySnapshot(JSON.parse(line));
   };
+}
+
+function createHelperRunner(
+  helperPath: string,
+  override: AtspiAccessibilityOptions["runHelper"],
+): NonNullable<AtspiAccessibilityOptions["runHelper"]> {
+  return override ?? (async (args, runOptions) => {
+    const result = await execFileAsync(PYTHON, [helperPath, ...args], {
+      encoding: "utf8",
+      maxBuffer: 8 * 1024 * 1024,
+      timeout: runOptions.timeout,
+      env: runOptions.env,
+    });
+    return { stdout: result.stdout };
+  });
 }

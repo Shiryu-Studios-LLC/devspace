@@ -536,6 +536,53 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
 
   registerAppTool(
     server,
+    "desktop_accessibility_action",
+    {
+      title: "Desktop Accessibility Action",
+      description:
+        "Invoke one semantic AT-SPI action on a node from a recent desktop_accessibility_snapshot. The target is resolved by pid-based semantic path and must still match the expected role/name (and accessible ID when supplied), so stale targets fail instead of acting on a different control.",
+      inputSchema: {
+        nodeId: z.string().regex(/^pid-\d+(?:\.\d+)*$/),
+        actionIndex: z.number().int().min(0).max(63),
+        expectedRole: z.string().min(1),
+        expectedName: z.string(),
+        expectedAccessibleId: z.string().min(1).optional(),
+      },
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        action: z.object({
+          performed: z.boolean(),
+          nodeId: z.string(),
+          actionIndex: z.number().int().nonnegative(),
+          actionName: z.string(),
+          performedAt: z.string(),
+        }).optional(),
+      },
+      _meta: {},
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) => {
+      try {
+        const action = await client.accessibilityAction(input);
+        const result = formatAccessibilityActionSummary(action);
+        return {
+          content: [{ type: "text" as const, text: result }],
+          structuredContent: { status: "ready" as const, result, action },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
     "desktop_recent_activity",
     {
       title: "Recent Desktop Activity",
@@ -1141,6 +1188,10 @@ function formatAccessibilitySummary(snapshot: DesktopAccessibilitySnapshot): str
   const focused = snapshot.nodes.filter((node) => node.states.includes("focused"));
   const actionable = snapshot.nodes.filter((node) => node.actions.length > 0);
   return `AT-SPI snapshot: ${snapshot.applicationCount} application(s), ${snapshot.nodeCount} node(s), ${focused.length} focused node(s), ${actionable.length} node(s) with semantic actions${snapshot.truncated ? "; truncated by requested bounds" : ""}.`;
+}
+
+function formatAccessibilityActionSummary(action: { performed: boolean; actionName: string; nodeId: string }): string {
+  return `${action.performed ? "Performed" : "AT-SPI declined"} semantic action ${JSON.stringify(action.actionName)} on ${action.nodeId}.`;
 }
 
 function formatClipboardReadSummary(clipboard: DesktopClipboardReadResult): string {

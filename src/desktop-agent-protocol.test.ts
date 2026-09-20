@@ -22,6 +22,7 @@ import {
   decodeDesktopScreenCapture,
   decodeDesktopClipboardReadResult,
   decodeDesktopClipboardWriteResult,
+  decodeDesktopAccessibilityActionResult,
   decodeDesktopAccessibilitySnapshot,
   decodeDesktopWindowList,
   encodeDesktopAgentRequest,
@@ -161,6 +162,35 @@ test("desktop agent accepts bounded accessibility snapshot requests", () => {
   assert.throws(
     () => decodeDesktopAgentRequest({ ...request, params: { maxNodes: 0 } }),
     /maxNodes must be between 1 and 500/,
+  );
+});
+
+test("desktop agent accepts guarded accessibility action requests", () => {
+  const request: DesktopAgentRequest = {
+    requestId: "request-accessibility-action",
+    protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
+    authToken: "a".repeat(64),
+    method: "accessibility.action",
+    params: {
+      nodeId: "pid-1234.0.2",
+      actionIndex: 1,
+      expectedRole: "push button",
+      expectedName: "OK",
+      expectedAccessibleId: "ok-button",
+    },
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
+  assert.throws(
+    () => decodeDesktopAgentRequest({ ...request, params: { ...request.params, nodeId: "app-0.1" } }),
+    /pid-based node ID/,
+  );
+  assert.throws(
+    () => decodeDesktopAgentRequest({ ...request, params: { ...request.params, actionIndex: 64 } }),
+    /between 0 and 63/,
+  );
+  assert.throws(
+    () => decodeDesktopAgentRequest({ ...request, params: { ...request.params, expectedName: 7 } }),
+    /expectedName must be a string/,
   );
 });
 
@@ -345,6 +375,19 @@ test("desktop agent decodes a structured accessibility snapshot", () => {
   assert.equal(snapshot.nodes[0]?.role, "application");
   assert.equal(snapshot.nodes[0]?.processId, 123);
   assert.equal(snapshot.nodes[0]?.actions[0]?.name, "activate");
+});
+
+test("desktop agent decodes a structured accessibility action result", () => {
+  const action = decodeDesktopAccessibilityActionResult({
+    performed: true,
+    nodeId: "pid-1234.0.2",
+    actionIndex: 0,
+    actionName: "click",
+    performedAt: "2026-09-20T12:00:00.000Z",
+  });
+  assert.equal(action.performed, true);
+  assert.equal(action.nodeId, "pid-1234.0.2");
+  assert.equal(action.actionName, "click");
 });
 
 test("desktop agent decodes a structured window list", () => {

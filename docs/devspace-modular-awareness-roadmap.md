@@ -61,7 +61,7 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [x] Structured Linux process/application awareness using `/proc`, correlated with KWin window ownership while excluding command-line arguments and environment variables.
 - [x] KDE/Wayland screenshot capture for workspace, named/active screen, named/active window, and rectangular areas via a narrowly authorized KWin ScreenShot2 helper; captures are private temporary PNGs deleted after MCP delivery.
 - [x] Bounded read-only AT-SPI accessibility tree with semantic roles, states, bounds, interfaces, and action metadata; editable/text contents intentionally excluded.
-- [ ] AT-SPI semantic UI action execution.
+- [x] Guarded AT-SPI semantic UI action execution using pid-based node paths plus stale-target role/name/accessibility-ID verification.
 - [ ] Keyboard/mouse input control.
 - [x] Wayland text clipboard read/write with independent `clipboard-read` / `clipboard-write` permissions and bounded 1 MiB payloads.
 - [x] Read-only bounded in-memory desktop notification awareness via passive freedesktop/Plasma D-Bus observation.

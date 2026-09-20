@@ -71,6 +71,8 @@ import {
   type DesktopScreenCaptureRequest,
   type DesktopClipboardReadResult,
   type DesktopClipboardWriteResult,
+  type DesktopAccessibilityActionRequest,
+  type DesktopAccessibilityActionResult,
   type DesktopAccessibilitySnapshot,
   type DesktopWindowInfo,
 } from "./desktop-agent-protocol.js";
@@ -98,6 +100,7 @@ import {
 } from "./desktop-clipboard-wayland.js";
 import {
   atspiAccessibilityAvailable,
+  createAtspiAccessibilityActionProvider,
   createAtspiAccessibilityProvider,
   type DesktopAccessibilitySnapshotOptions,
 } from "./desktop-accessibility-atspi.js";
@@ -117,6 +120,7 @@ export interface DesktopAgentDaemonOptions {
   clipboardRead?: () => Promise<DesktopClipboardReadResult>;
   clipboardWrite?: (text: string) => Promise<DesktopClipboardWriteResult>;
   accessibilitySnapshot?: (options?: DesktopAccessibilitySnapshotOptions) => Promise<DesktopAccessibilitySnapshot>;
+  accessibilityAction?: (request: DesktopAccessibilityActionRequest) => Promise<DesktopAccessibilityActionResult>;
   audioGraph?: () => Promise<DesktopAudioGraph>;
   devices?: () => Promise<DesktopDeviceInfo[]>;
   networkSnapshot?: () => Promise<DesktopNetworkSnapshot>;
@@ -143,6 +147,7 @@ export class DesktopAgentDaemon {
   private readonly clipboardReadProvider: () => Promise<DesktopClipboardReadResult>;
   private readonly clipboardWriteProvider: (text: string) => Promise<DesktopClipboardWriteResult>;
   private readonly accessibilitySnapshotProvider: (options?: DesktopAccessibilitySnapshotOptions) => Promise<DesktopAccessibilitySnapshot>;
+  private readonly accessibilityActionProvider: (request: DesktopAccessibilityActionRequest) => Promise<DesktopAccessibilityActionResult>;
   private readonly audioGraphProvider: () => Promise<DesktopAudioGraph>;
   private readonly devicesProvider: () => Promise<DesktopDeviceInfo[]>;
   private readonly networkSnapshotProvider: () => Promise<DesktopNetworkSnapshot>;
@@ -175,6 +180,7 @@ export class DesktopAgentDaemon {
     this.clipboardReadProvider = options.clipboardRead ?? readWaylandClipboardText;
     this.clipboardWriteProvider = options.clipboardWrite ?? writeWaylandClipboardText;
     this.accessibilitySnapshotProvider = options.accessibilitySnapshot ?? createAtspiAccessibilityProvider();
+    this.accessibilityActionProvider = options.accessibilityAction ?? createAtspiAccessibilityActionProvider();
     this.audioGraphProvider = options.audioGraph ?? getPipeWireAudioGraph;
     this.devicesProvider = options.devices ?? listLinuxDevices;
     this.networkSnapshotProvider = options.networkSnapshot ?? getLinuxNetworkSnapshot;
@@ -475,6 +481,16 @@ export class DesktopAgentDaemon {
         }
         return this.accessibilitySnapshotProvider(request.params);
       }
+      case "accessibility.action": {
+        const accessibilityCapability = this.capabilitiesProvider().find((capability) => capability.id === "accessibility");
+        if (accessibilityCapability?.state !== "ready") {
+          throw new DesktopAgentProtocolError(
+            "DESKTOP_ACCESSIBILITY_UNAVAILABLE",
+            accessibilityCapability?.detail ?? "Accessibility actions are unavailable.",
+          );
+        }
+        return this.accessibilityActionProvider(request.params);
+      }
       case "events.recent": {
         const eventsCapability = this.capabilitiesProvider().find((capability) => capability.id === "events");
         if (eventsCapability?.state !== "ready") {
@@ -708,7 +724,8 @@ function permissionForDesktopMethod(method: DesktopAgentRequest["method"]): Desk
     case "screen.capture": return "screen";
     case "clipboard.read": return "clipboard-read";
     case "clipboard.write": return "clipboard-write";
-    case "accessibility.snapshot": return "accessibility";
+    case "accessibility.snapshot":
+    case "accessibility.action": return "accessibility";
     case "events.recent": return "events";
     case "audio.graph": return "audio";
     case "devices.list": return "devices";

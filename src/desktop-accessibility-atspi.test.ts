@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createAtspiAccessibilityProvider } from "./desktop-accessibility-atspi.js";
+import {
+  createAtspiAccessibilityActionProvider,
+  createAtspiAccessibilityProvider,
+} from "./desktop-accessibility-atspi.js";
 
 test("AT-SPI provider bounds traversal arguments and decodes normalized output", async () => {
   let receivedArgs: string[] = [];
@@ -48,6 +51,45 @@ test("AT-SPI provider bounds traversal arguments and decodes normalized output",
   ]);
   assert.equal(snapshot.applicationCount, 1);
   assert.equal(snapshot.nodes[0]?.accessibleId, "org.example.App");
+});
+
+test("AT-SPI action provider maps guarded semantic action arguments", async () => {
+  let receivedArgs: string[] = [];
+  const provider = createAtspiAccessibilityActionProvider({
+    runHelper: async (args) => {
+      receivedArgs = args;
+      return {
+        stdout: `${JSON.stringify({
+          performed: true,
+          nodeId: "pid-123.0",
+          actionIndex: 0,
+          actionName: "click",
+          performedAt: "2026-09-20T12:00:00.000Z",
+        })}\n`,
+      };
+    },
+  });
+  const result = await provider({
+    nodeId: "pid-123.0",
+    actionIndex: 0,
+    expectedRole: "push button",
+    expectedName: "OK",
+    expectedAccessibleId: "ok-button",
+  });
+  assert.deepEqual(receivedArgs, [
+    "action",
+    "--node-id",
+    "pid-123.0",
+    "--action-index",
+    "0",
+    "--expected-role",
+    "push button",
+    "--expected-name",
+    "OK",
+    "--expected-accessible-id",
+    "ok-button",
+  ]);
+  assert.equal(result.performed, true);
 });
 
 test("AT-SPI provider rejects out-of-range traversal bounds before helper execution", async () => {
