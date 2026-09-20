@@ -1,5 +1,8 @@
 import type {
   DesktopActivityEvent,
+  DesktopAudioGraph,
+  DesktopAudioLink,
+  DesktopAudioNode,
   DesktopDisplayInfo,
   DesktopProcessInfo,
   DesktopWindowInfo,
@@ -9,6 +12,7 @@ export interface DesktopActivityMonitorOptions {
   windows: () => Promise<DesktopWindowInfo[]>;
   displays: () => Promise<DesktopDisplayInfo[]>;
   processes: () => Promise<DesktopProcessInfo[]>;
+  audio?: () => Promise<DesktopAudioGraph>;
   pollIntervalMs?: number;
   maxEvents?: number;
   now?: () => number;
@@ -21,6 +25,7 @@ export class DesktopActivityMonitor {
   private readonly windowsProvider: () => Promise<DesktopWindowInfo[]>;
   private readonly displaysProvider: () => Promise<DesktopDisplayInfo[]>;
   private readonly processesProvider: () => Promise<DesktopProcessInfo[]>;
+  private readonly audioProvider?: () => Promise<DesktopAudioGraph>;
   private readonly pollIntervalMs: number;
   private readonly maxEvents: number;
   private readonly now: () => number;
@@ -28,6 +33,9 @@ export class DesktopActivityMonitor {
   private windows = new Map<string, DesktopWindowInfo>();
   private displays = new Map<string, DesktopDisplayInfo>();
   private processes = new Map<number, DesktopProcessInfo>();
+  private audioNodes = new Map<number, DesktopAudioNode>();
+  private audioStreams = new Map<number, DesktopAudioNode>();
+  private audioLinks = new Map<number, DesktopAudioLink>();
   private initialized = false;
   private polling = false;
   private sequence = 0;
@@ -37,6 +45,7 @@ export class DesktopActivityMonitor {
     this.windowsProvider = options.windows;
     this.displaysProvider = options.displays;
     this.processesProvider = options.processes;
+    this.audioProvider = options.audio;
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
     this.maxEvents = options.maxEvents ?? DEFAULT_MAX_EVENTS;
     this.now = options.now ?? Date.now;
@@ -76,13 +85,14 @@ export class DesktopActivityMonitor {
     if (this.polling) return;
     this.polling = true;
     try {
-      // KWin/KScreen providers may use short-lived helper processes such as
-      // busctl or kscreen-doctor. Finish those observations before sampling
-      // /proc so the activity monitor does not report its own probes as user
-      // process start/stop events.
-      const [windowsResult, displaysResult] = await Promise.allSettled([
+      // KWin/KScreen/PipeWire providers may use short-lived helper processes
+      // such as busctl, kscreen-doctor, or pw-dump. Finish those observations
+      // before sampling /proc so the activity monitor does not report its own
+      // probes as user process start/stop events.
+      const [windowsResult, displaysResult, audioResult] = await Promise.allSettled([
         this.windowsProvider(),
         this.displaysProvider(),
+        this.audioProvider ? this.audioProvider() : Promise.resolve(undefined),
       ]);
       const processesResult = await Promise.resolve(this.processesProvider()).then(
         (value) => ({ status: "fulfilled" as const, value }),
@@ -98,11 +108,24 @@ export class DesktopActivityMonitor {
       const nextProcesses = processesResult.status === "fulfilled"
         ? new Map(processesResult.value.map((processInfo) => [processInfo.pid, processInfo]))
         : this.processes;
+      const audioGraph = audioResult.status === "fulfilled" ? audioResult.value : undefined;
+      const nextAudioNodes = audioGraph
+        ? new Map(audioGraph.nodes.map((node) => [node.id, node]))
+        : this.audioNodes;
+      const nextAudioStreams = audioGraph
+        ? new Map(audioGraph.nodes.filter((node) => node.isStream).map((node) => [node.id, node]))
+        : this.audioStreams;
+      const nextAudioLinks = audioGraph
+        ? new Map(audioGraph.links.map((link) => [link.id, link]))
+        : this.audioLinks;
 
       if (!this.initialized) {
         this.windows = nextWindows;
         this.displays = nextDisplays;
         this.processes = nextProcesses;
+        this.audioNodes = nextAudioNodes;
+        this.audioStreams = nextAudioStreams;
+        this.audioLinks = nextAudioLinks;
         this.initialized = true;
         return;
       }
@@ -110,10 +133,17 @@ export class DesktopActivityMonitor {
       if (processesResult.status === "fulfilled") this.diffProcesses(this.processes, nextProcesses);
       if (windowsResult.status === "fulfilled") this.diffWindows(this.windows, nextWindows);
       if (displaysResult.status === "fulfilled") this.diffDisplays(this.displays, nextDisplays);
+      if (audioGraph) {
+        this.diffAudioStreams(this.audioStreams, nextAudioStreams);
+        this.diffAudioLinks(this.audioLinks, nextAudioLinks, this.audioNodes, nextAudioNodes);
+      }
 
       this.windows = nextWindows;
       this.displays = nextDisplays;
       this.processes = nextProcesses;
+      this.audioNodes = nextAudioNodes;
+      this.audioStreams = nextAudioStreams;
+      this.audioLinks = nextAudioLinks;
     } finally {
       this.polling = false;
     }
@@ -254,6 +284,77 @@ export class DesktopActivityMonitor {
     }
   }
 
+  private diffAudioStreams(
+    previous: Map<number, DesktopAudioNode>,
+    next: Map<number, DesktopAudioNode>,
+  ): void {
+    for (const [id, stream] of next) {
+      const old = previous.get(id);
+      if (!old) {
+        this.push({
+          type: "audio.stream.started",
+          sourceModule: "audio",
+          entityId: String(id),
+          correlationId: audioNodeCorrelationId(stream),
+          applicationId: audioNodeApplicationId(stream),
+          pid: stream.pid,
+          summary: `Audio stream started: ${audioNodeLabel(stream)}.`,
+        });
+        continue;
+      }
+      const changed = changedAudioStreamFields(old, stream);
+      if (changed.length === 0) continue;
+      this.push({
+        type: "audio.stream.changed",
+        sourceModule: "audio",
+        entityId: String(id),
+        correlationId: audioNodeCorrelationId(stream),
+        applicationId: audioNodeApplicationId(stream),
+        pid: stream.pid,
+        summary: `Audio stream changed: ${audioNodeLabel(stream)}; ${changed.join(", ")}.`,
+      });
+    }
+    for (const [id, stream] of previous) {
+      if (next.has(id)) continue;
+      this.push({
+        type: "audio.stream.stopped",
+        sourceModule: "audio",
+        entityId: String(id),
+        correlationId: audioNodeCorrelationId(stream),
+        applicationId: audioNodeApplicationId(stream),
+        pid: stream.pid,
+        summary: `Audio stream stopped: ${audioNodeLabel(stream)}.`,
+      });
+    }
+  }
+
+  private diffAudioLinks(
+    previous: Map<number, DesktopAudioLink>,
+    next: Map<number, DesktopAudioLink>,
+    previousNodes: Map<number, DesktopAudioNode>,
+    nextNodes: Map<number, DesktopAudioNode>,
+  ): void {
+    for (const [id, link] of next) {
+      const old = previous.get(id);
+      if (!old) {
+        this.push(audioRouteEvent("audio.route.created", link, nextNodes, `Audio route created: ${audioRouteLabel(link)}.`));
+        continue;
+      }
+      const changed = changedAudioLinkFields(old, link);
+      if (changed.length === 0) continue;
+      this.push(audioRouteEvent(
+        "audio.route.changed",
+        link,
+        nextNodes,
+        `Audio route changed: ${audioRouteLabel(link)}; ${changed.join(", ")}.`,
+      ));
+    }
+    for (const [id, link] of previous) {
+      if (next.has(id)) continue;
+      this.push(audioRouteEvent("audio.route.removed", link, previousNodes, `Audio route removed: ${audioRouteLabel(link)}.`));
+    }
+  }
+
   private push(event: Omit<DesktopActivityEvent, "sequence" | "timestamp">): void {
     this.sequence += 1;
     this.events.push({
@@ -294,4 +395,82 @@ function changedDisplayFields(previous: DesktopDisplayInfo, next: DesktopDisplay
   if (previous.currentModeId !== next.currentModeId) changed.push("mode");
   if (previous.brightness !== next.brightness) changed.push("brightness");
   return changed;
+}
+
+function changedAudioStreamFields(previous: DesktopAudioNode, next: DesktopAudioNode): string[] {
+  const changed: string[] = [];
+  if (previous.state !== next.state) changed.push(`state ${previous.state ?? "unknown"} → ${next.state ?? "unknown"}`);
+  if (previous.targetObject !== next.targetObject) changed.push("target route");
+  if (previous.sampleRate !== next.sampleRate) changed.push("sample rate");
+  if (previous.latency !== next.latency) changed.push("latency");
+  if (previous.mediaClass !== next.mediaClass) changed.push("media class");
+  if (audioNodeApplicationId(previous) !== audioNodeApplicationId(next)) changed.push("application identity");
+  return changed;
+}
+
+function changedAudioLinkFields(previous: DesktopAudioLink, next: DesktopAudioLink): string[] {
+  const changed: string[] = [];
+  // PipeWire commonly toggles link transport state between active and paused
+  // while keeping the same routing topology. Stream state events already carry
+  // that activity signal, so route events stay focused on topology changes.
+  if (
+    previous.outputNodeId !== next.outputNodeId
+    || previous.outputPortId !== next.outputPortId
+    || previous.inputNodeId !== next.inputNodeId
+    || previous.inputPortId !== next.inputPortId
+  ) {
+    changed.push("endpoints");
+  }
+  if (
+    previous.outputNodeName !== next.outputNodeName
+    || previous.inputNodeName !== next.inputNodeName
+    || previous.outputPortName !== next.outputPortName
+    || previous.inputPortName !== next.inputPortName
+  ) {
+    changed.push("route identity");
+  }
+  return changed;
+}
+
+function audioNodeApplicationId(node: DesktopAudioNode): string {
+  return node.applicationBinary
+    ?? node.applicationName
+    ?? node.mediaName
+    ?? node.description
+    ?? node.name;
+}
+
+function audioNodeCorrelationId(node: DesktopAudioNode): string {
+  return node.pid !== undefined ? `pid:${node.pid}` : `audio-node:${node.id}`;
+}
+
+function audioNodeLabel(node: DesktopAudioNode): string {
+  const label = node.applicationName ?? node.mediaName ?? node.description ?? node.name;
+  return node.state ? `${label} (${node.state})` : label;
+}
+
+function audioRouteEvent(
+  type: "audio.route.created" | "audio.route.removed" | "audio.route.changed",
+  link: DesktopAudioLink,
+  nodes: Map<number, DesktopAudioNode>,
+  summary: string,
+): Omit<DesktopActivityEvent, "sequence" | "timestamp"> {
+  const inputNode = nodes.get(link.inputNodeId);
+  const outputNode = nodes.get(link.outputNodeId);
+  const stream = [inputNode, outputNode].find((node) => node?.isStream) ?? inputNode ?? outputNode;
+  return {
+    type,
+    sourceModule: "audio",
+    entityId: String(link.id),
+    correlationId: stream ? audioNodeCorrelationId(stream) : `audio-route:${link.id}`,
+    applicationId: stream ? audioNodeApplicationId(stream) : undefined,
+    pid: stream?.pid,
+    summary,
+  };
+}
+
+function audioRouteLabel(link: DesktopAudioLink): string {
+  const output = link.outputPortName ? `${link.outputNodeName}:${link.outputPortName}` : link.outputNodeName;
+  const input = link.inputPortName ? `${link.inputNodeName}:${link.inputPortName}` : link.inputNodeName;
+  return `${output} → ${input}`;
 }

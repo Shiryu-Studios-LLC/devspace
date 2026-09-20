@@ -264,7 +264,7 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
     {
       title: "Recent Desktop Activity",
       description:
-        "Read the isolated desktop agent's bounded in-memory activity timeline for recent process, window, and display changes. The cursor is monotonically increasing while the agent is running, so callers can remember a cursor before an action and compare later events. No keystrokes, screenshots, command-line arguments, or environment contents are recorded.",
+        "Read the isolated desktop agent's bounded in-memory activity timeline for recent process, window, display, and PipeWire audio stream/route changes. The cursor is monotonically increasing while the agent is running, so callers can remember a cursor before an action and compare later events. No keystrokes, screenshots, command-line arguments, or environment contents are recorded.",
       inputSchema: {},
       outputSchema: {
         status: z.enum(["ready", "error"]),
@@ -282,8 +282,14 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
             "display.connected",
             "display.disconnected",
             "display.changed",
+            "audio.stream.started",
+            "audio.stream.stopped",
+            "audio.stream.changed",
+            "audio.route.created",
+            "audio.route.removed",
+            "audio.route.changed",
           ]),
-          sourceModule: z.enum(["processes", "windows", "displays"]),
+          sourceModule: z.enum(["processes", "windows", "displays", "audio"]),
           entityId: z.string(),
           correlationId: z.string(),
           applicationId: z.string().optional(),

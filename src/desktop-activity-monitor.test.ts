@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { DesktopActivityMonitor } from "./desktop-activity-monitor.js";
 import type {
+  DesktopAudioGraph,
   DesktopDisplayInfo,
   DesktopProcessInfo,
   DesktopWindowInfo,
@@ -47,6 +48,52 @@ test("desktop activity monitor establishes a silent baseline and records bounded
   assert.equal(events[2]?.correlationId, "pid:202");
   assert.equal(events[3]?.correlationId, "display:HDMI-A-1");
   assert.equal(events[3]?.timestamp, "2026-09-20T01:00:01.000Z");
+});
+
+test("desktop activity monitor records PipeWire stream and route changes", async () => {
+  let audio = audioGraph(
+    [
+      audioStream(200, "WEBRTC VoiceEngine", 1800836, "running", "shiryu.input.1.clean"),
+    ],
+    [audioLink(88, 91, 200, "Shiryu Microphone 1", "WEBRTC VoiceEngine")],
+  );
+  const monitor = new DesktopActivityMonitor({
+    windows: async () => [],
+    processes: async () => [],
+    displays: async () => [],
+    audio: async () => audio,
+  });
+
+  await monitor.sample();
+  assert.equal(monitor.cursor(), 0, "initial PipeWire graph should establish a silent baseline");
+
+  audio = audioGraph(
+    [
+      audioStream(200, "WEBRTC VoiceEngine", 1800836, "idle", "shiryu.input.2.clean"),
+      audioStream(300, "Spotify", 333, "running", "shiryu.cable.1.input"),
+    ],
+    [audioLink(99, 300, 81, "Spotify", "Spotify / Music Input")],
+  );
+  await monitor.sample();
+
+  assert.deepEqual(monitor.recent().map((event) => event.type), [
+    "audio.stream.changed",
+    "audio.stream.started",
+    "audio.route.created",
+    "audio.route.removed",
+  ]);
+  assert.equal(monitor.recent()[0]?.correlationId, "pid:1800836");
+  assert.equal(monitor.recent()[1]?.correlationId, "pid:333");
+  assert.equal(monitor.recent()[2]?.correlationId, "pid:333");
+  assert.equal(monitor.recent()[3]?.correlationId, "pid:1800836");
+
+  audio = audioGraph([], []);
+  await monitor.sample();
+  assert.deepEqual(monitor.recent(3).map((event) => event.type), [
+    "audio.stream.stopped",
+    "audio.stream.stopped",
+    "audio.route.removed",
+  ]);
 });
 
 function windowInfo(id: string, pid: number, title: string, x: number): DesktopWindowInfo {
@@ -118,5 +165,82 @@ function displayInfo(name: string, refreshRate: number, brightness: number): Des
     preferredModeIds: ["60"],
     modes: [],
     clones: [],
+  };
+}
+
+function audioGraph(nodes: DesktopAudioGraph["nodes"], links: DesktopAudioGraph["links"]): DesktopAudioGraph {
+  return {
+    generatedAt: "2026-09-20T02:00:00.000Z",
+    nodes: [
+      {
+        id: 91,
+        name: "shiryu.input.1.clean",
+        mediaClass: "Audio/Source",
+        state: "running",
+        description: "Shiryu Microphone 1",
+        applicationName: "Shiryu Audio",
+        isStream: false,
+        isSink: false,
+        isSource: true,
+      },
+      {
+        id: 81,
+        name: "shiryu.cable.1.input",
+        mediaClass: "Audio/Sink",
+        state: "running",
+        description: "Spotify / Music Input",
+        applicationName: "Shiryu Audio",
+        isStream: false,
+        isSink: true,
+        isSource: false,
+      },
+      ...nodes,
+    ],
+    ports: [],
+    links,
+  };
+}
+
+function audioStream(
+  id: number,
+  applicationName: string,
+  pid: number,
+  state: string,
+  targetObject: string,
+): DesktopAudioGraph["nodes"][number] {
+  return {
+    id,
+    name: applicationName,
+    mediaClass: "Stream/Input/Audio",
+    state,
+    applicationName,
+    applicationBinary: applicationName === "WEBRTC VoiceEngine" ? "Discord" : applicationName,
+    pid,
+    targetObject,
+    sampleRate: 48000,
+    isStream: true,
+    isSink: false,
+    isSource: false,
+  };
+}
+
+function audioLink(
+  id: number,
+  outputNodeId: number,
+  inputNodeId: number,
+  outputNodeName: string,
+  inputNodeName: string,
+): DesktopAudioGraph["links"][number] {
+  return {
+    id,
+    state: "active",
+    outputNodeId,
+    outputPortId: id * 2,
+    inputNodeId,
+    inputPortId: id * 2 + 1,
+    outputNodeName,
+    inputNodeName,
+    outputPortName: "out_FL",
+    inputPortName: "in_FL",
   };
 }

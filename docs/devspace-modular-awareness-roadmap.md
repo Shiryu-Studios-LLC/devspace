@@ -74,7 +74,7 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [x] Add a common event envelope with sequence, timestamp, source module, application identity, entity ID, and correlation ID.
 - [x] Add process start/stop events.
 - [ ] Add window focus events. Window create/close/move/resize/title/state changes are already captured by the polling timeline.
-- [ ] Add audio stream/route events.
+- [x] Add PipeWire audio stream start/stop/change and route create/remove/topology-change events, while suppressing noisy link transport-state flaps.
 - [ ] Add device connect/disconnect/change events.
 - [ ] Add notification events.
 - [ ] Add authorized filesystem events.

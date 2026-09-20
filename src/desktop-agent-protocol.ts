@@ -111,13 +111,19 @@ export type DesktopActivityEventType =
   | "window.changed"
   | "display.connected"
   | "display.disconnected"
-  | "display.changed";
+  | "display.changed"
+  | "audio.stream.started"
+  | "audio.stream.stopped"
+  | "audio.stream.changed"
+  | "audio.route.created"
+  | "audio.route.removed"
+  | "audio.route.changed";
 
 export interface DesktopActivityEvent {
   sequence: number;
   timestamp: string;
   type: DesktopActivityEventType;
-  sourceModule: "processes" | "windows" | "displays";
+  sourceModule: "processes" | "windows" | "displays" | "audio";
   entityId: string;
   correlationId: string;
   applicationId?: string;
@@ -451,7 +457,7 @@ function decodeDesktopActivityEvent(value: unknown): DesktopActivityEvent {
     throw new DesktopAgentProtocolError("INVALID_EVENTS", `Invalid desktop activity event type: ${type}`);
   }
   const sourceModule = requiredString(record.sourceModule, "event.sourceModule");
-  if (sourceModule !== "processes" && sourceModule !== "windows" && sourceModule !== "displays") {
+  if (sourceModule !== "processes" && sourceModule !== "windows" && sourceModule !== "displays" && sourceModule !== "audio") {
     throw new DesktopAgentProtocolError("INVALID_EVENTS", `Invalid desktop activity source: ${sourceModule}`);
   }
   return {
@@ -560,7 +566,13 @@ function isDesktopActivityEventType(value: string): value is DesktopActivityEven
     || value === "window.changed"
     || value === "display.connected"
     || value === "display.disconnected"
-    || value === "display.changed";
+    || value === "display.changed"
+    || value === "audio.stream.started"
+    || value === "audio.stream.stopped"
+    || value === "audio.stream.changed"
+    || value === "audio.route.created"
+    || value === "audio.route.removed"
+    || value === "audio.route.changed";
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
