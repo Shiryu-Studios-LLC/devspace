@@ -18,10 +18,7 @@ import express from "express";
 import type { Request, Response } from "express";
 import * as z from "zod/v4";
 import { applyPatch } from "./apply-patch.js";
-import {
-  isArtifactDownloadSupportedPlatform,
-  registerArtifactTools,
-} from "./artifact-tools.js";
+import { isArtifactDownloadSupportedPlatform } from "./artifact-tools.js";
 import { loadConfig, type ServerConfig, type WidgetMode } from "./config.js";
 import {
   createOpenAIIncomingArtifactAdapter,
@@ -50,13 +47,12 @@ import {
 } from "./mcp-sessions.js";
 import { ProcessSessionManager, type ProcessSnapshot } from "./process-sessions.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
-import { registerDevSpaceAdminTools } from "./devspace-admin-tools.js";
-import { registerGitTools } from "./git-tools.js";
-import { registerLocalWindowsTools } from "./local-windows-tools.js";
+import { lateBuiltinModules, upstreamMcpModule } from "./modules/builtin.js";
+import { DevSpaceModuleRegistry } from "./modules/registry.js";
+import { registerModuleStatusTool } from "./modules/status-tool.js";
 import { openAiConversationScopeId } from "./request-meta.js";
 import { shutdownHttpServer } from "./server-shutdown.js";
 import { formatPathForPrompt } from "./skills.js";
-import { registerUpstreamMcpTools } from "./upstream-mcp.js";
 import { createWorkspaceStore } from "./workspace-store.js";
 import { formatAgentsPath, WorkspaceRegistry } from "./workspaces.js";
 import {
@@ -785,7 +781,9 @@ export function createMcpServer(
     },
   );
 
-  registerUpstreamMcpTools(server, config);
+  const moduleRegistry = new DevSpaceModuleRegistry();
+  const moduleContext = { server, config, workspaces, incomingArtifactAdapters };
+  moduleRegistry.register(upstreamMcpModule, moduleContext);
 
   registerAppResource(
     server,
@@ -1924,17 +1922,8 @@ export function createMcpServer(
     registerCodexProcessTools(server, config, workspaces, processSessions);
   }
 
-  registerGitTools(server, config, workspaces);
-  registerDevSpaceAdminTools(server, config);
-  registerLocalWindowsTools(server, config, workspaces);
-
-  if (config.artifactsEnabled && isArtifactDownloadSupportedPlatform()) {
-    registerArtifactTools(server, {
-      config,
-      workspaces,
-      incomingArtifactAdapters,
-    });
-  }
+  moduleRegistry.registerMany(lateBuiltinModules, moduleContext);
+  registerModuleStatusTool(server, moduleRegistry);
 
   return server;
 }

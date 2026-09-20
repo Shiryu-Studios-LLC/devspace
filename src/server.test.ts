@@ -159,6 +159,31 @@ test("subagent-disabled servers omit first-class agent orchestration tools", asy
   }
 });
 
+test("module status keeps core health separate from secondary modules", async (t) => {
+  const context = await fixture(t);
+  const tools = await context.client.listTools();
+  assert.equal(
+    tools.tools.some((tool) => tool.name === "get_devspace_module_status"),
+    true,
+  );
+
+  const result = await context.client.callTool({
+    name: "get_devspace_module_status",
+    arguments: {},
+  });
+  const state = structuredContent(result);
+  assert.deepEqual(state.core, { id: "core", status: "ready" });
+
+  const modules = state.modules as Array<{ id: string; status: string }>;
+  const statuses = new Map(modules.map((module) => [module.id, module.status]));
+  for (const id of ["upstream-mcp", "git", "admin", "desktop-windows", "artifacts"]) {
+    assert.equal(statuses.has(id), true, `${id} should report module health`);
+  }
+  assert.equal(statuses.get("upstream-mcp"), "ready");
+  assert.equal(statuses.get("git"), "ready");
+  assert.equal(statuses.get("admin"), "ready");
+});
+
 test("concurrent checkout opens return one full context and one reuse instruction", async (t) => {
   const context = await fixture(t);
   const [first, second] = await Promise.all([
