@@ -26,6 +26,7 @@ import type {
   DesktopScreenCapture,
   DesktopClipboardReadResult,
   DesktopClipboardWriteResult,
+  DesktopAccessibilitySnapshot,
   DesktopWindowInfo,
 } from "../desktop-agent-protocol.js";
 
@@ -457,6 +458,75 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
         return {
           content: [{ type: "text" as const, text: result }],
           structuredContent: { status: "ready" as const, result, clipboard },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "desktop_accessibility_snapshot",
+    {
+      title: "Desktop Accessibility Snapshot",
+      description:
+        "Read a bounded AT-SPI semantic accessibility tree from the Linux desktop. Returns structural labels, roles, states, bounds, interfaces, and available action metadata; it does not read editable/text contents and does not execute actions.",
+      inputSchema: {
+        application: z.string().min(1).optional(),
+        maxDepth: z.number().int().min(0).max(8).optional(),
+        maxNodes: z.number().int().min(1).max(500).optional(),
+      },
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        snapshot: z.object({
+          generatedAt: z.string(),
+          applicationCount: z.number().int().nonnegative(),
+          nodeCount: z.number().int().nonnegative(),
+          truncated: z.boolean(),
+          maxDepth: z.number().int().nonnegative(),
+          maxNodes: z.number().int().positive(),
+          nodes: z.array(z.object({
+            id: z.string(),
+            parentId: z.string().optional(),
+            depth: z.number().int().nonnegative(),
+            application: z.string(),
+            accessibleId: z.string(),
+            processId: z.number().int().nonnegative(),
+            name: z.string(),
+            description: z.string(),
+            role: z.string(),
+            localizedRole: z.string(),
+            childCount: z.number().int().nonnegative(),
+            states: z.array(z.string()),
+            interfaces: z.array(z.string()),
+            actions: z.array(z.object({
+              index: z.number().int().nonnegative(),
+              name: z.string(),
+              description: z.string(),
+              keyBinding: z.string(),
+            })),
+            bounds: z.object({
+              x: z.number().int(),
+              y: z.number().int(),
+              width: z.number().int(),
+              height: z.number().int(),
+            }).optional(),
+            attributes: z.record(z.string(), z.string()).optional(),
+          })),
+        }).optional(),
+      },
+      _meta: {},
+      annotations: readAnnotations,
+    },
+    async ({ application, maxDepth, maxNodes }) => {
+      try {
+        const snapshot = await client.accessibilitySnapshot({ application, maxDepth, maxNodes });
+        const result = formatAccessibilitySummary(snapshot);
+        return {
+          content: [{ type: "text" as const, text: result }],
+          structuredContent: { status: "ready" as const, result, snapshot },
         };
       } catch (error) {
         return clientErrorResponse(error);
@@ -1065,6 +1135,12 @@ function describeStatus(status: DesktopAgentStatus): string {
     `session ${status.sessionType}`,
     `protocol ${status.protocolVersion}`,
   ].join("; ");
+}
+
+function formatAccessibilitySummary(snapshot: DesktopAccessibilitySnapshot): string {
+  const focused = snapshot.nodes.filter((node) => node.states.includes("focused"));
+  const actionable = snapshot.nodes.filter((node) => node.actions.length > 0);
+  return `AT-SPI snapshot: ${snapshot.applicationCount} application(s), ${snapshot.nodeCount} node(s), ${focused.length} focused node(s), ${actionable.length} node(s) with semantic actions${snapshot.truncated ? "; truncated by requested bounds" : ""}.`;
 }
 
 function formatClipboardReadSummary(clipboard: DesktopClipboardReadResult): string {

@@ -28,6 +28,7 @@ import {
   decodeDesktopScreenCapture,
   decodeDesktopClipboardReadResult,
   decodeDesktopClipboardWriteResult,
+  decodeDesktopAccessibilitySnapshot,
   decodeDesktopWindowList,
   encodeDesktopAgentRequest,
   type DesktopActivityTimeline,
@@ -51,6 +52,7 @@ import {
   type DesktopScreenCaptureRequest,
   type DesktopClipboardReadResult,
   type DesktopClipboardWriteResult,
+  type DesktopAccessibilitySnapshot,
   type DesktopWindowInfo,
 } from "./desktop-agent-protocol.js";
 
@@ -143,6 +145,10 @@ export class DesktopAgentClient {
 
   async writeClipboard(text: string): Promise<DesktopClipboardWriteResult> {
     return decodeDesktopClipboardWriteResult(await this.requestReady("clipboard.write", { text }));
+  }
+
+  async accessibilitySnapshot(options: { application?: string; maxDepth?: number; maxNodes?: number } = {}): Promise<DesktopAccessibilitySnapshot> {
+    return decodeDesktopAccessibilitySnapshot(await this.requestReady("accessibility.snapshot", { ...options }));
   }
 
   async recentActivity(): Promise<DesktopActivityTimeline> {

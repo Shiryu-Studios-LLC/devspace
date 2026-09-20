@@ -71,6 +71,7 @@ import {
   type DesktopScreenCaptureRequest,
   type DesktopClipboardReadResult,
   type DesktopClipboardWriteResult,
+  type DesktopAccessibilitySnapshot,
   type DesktopWindowInfo,
 } from "./desktop-agent-protocol.js";
 import {
@@ -95,6 +96,11 @@ import {
   waylandClipboardWriteAvailable,
   writeWaylandClipboardText,
 } from "./desktop-clipboard-wayland.js";
+import {
+  atspiAccessibilityAvailable,
+  createAtspiAccessibilityProvider,
+  type DesktopAccessibilitySnapshotOptions,
+} from "./desktop-accessibility-atspi.js";
 
 const MAX_REQUEST_BYTES = 128 * 1024;
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -110,6 +116,7 @@ export interface DesktopAgentDaemonOptions {
   screenCapture?: (request: DesktopScreenCaptureRequest) => Promise<DesktopScreenCapture>;
   clipboardRead?: () => Promise<DesktopClipboardReadResult>;
   clipboardWrite?: (text: string) => Promise<DesktopClipboardWriteResult>;
+  accessibilitySnapshot?: (options?: DesktopAccessibilitySnapshotOptions) => Promise<DesktopAccessibilitySnapshot>;
   audioGraph?: () => Promise<DesktopAudioGraph>;
   devices?: () => Promise<DesktopDeviceInfo[]>;
   networkSnapshot?: () => Promise<DesktopNetworkSnapshot>;
@@ -135,6 +142,7 @@ export class DesktopAgentDaemon {
   private readonly screenCaptureProvider: (request: DesktopScreenCaptureRequest) => Promise<DesktopScreenCapture>;
   private readonly clipboardReadProvider: () => Promise<DesktopClipboardReadResult>;
   private readonly clipboardWriteProvider: (text: string) => Promise<DesktopClipboardWriteResult>;
+  private readonly accessibilitySnapshotProvider: (options?: DesktopAccessibilitySnapshotOptions) => Promise<DesktopAccessibilitySnapshot>;
   private readonly audioGraphProvider: () => Promise<DesktopAudioGraph>;
   private readonly devicesProvider: () => Promise<DesktopDeviceInfo[]>;
   private readonly networkSnapshotProvider: () => Promise<DesktopNetworkSnapshot>;
@@ -166,6 +174,7 @@ export class DesktopAgentDaemon {
     this.screenCaptureProvider = options.screenCapture ?? createKdeScreenCaptureProvider(this.paths.stateDir, { now: options.now });
     this.clipboardReadProvider = options.clipboardRead ?? readWaylandClipboardText;
     this.clipboardWriteProvider = options.clipboardWrite ?? writeWaylandClipboardText;
+    this.accessibilitySnapshotProvider = options.accessibilitySnapshot ?? createAtspiAccessibilityProvider();
     this.audioGraphProvider = options.audioGraph ?? getPipeWireAudioGraph;
     this.devicesProvider = options.devices ?? listLinuxDevices;
     this.networkSnapshotProvider = options.networkSnapshot ?? getLinuxNetworkSnapshot;
@@ -456,6 +465,16 @@ export class DesktopAgentDaemon {
         }
         return this.clipboardWriteProvider(request.params.text);
       }
+      case "accessibility.snapshot": {
+        const accessibilityCapability = this.capabilitiesProvider().find((capability) => capability.id === "accessibility");
+        if (accessibilityCapability?.state !== "ready") {
+          throw new DesktopAgentProtocolError(
+            "DESKTOP_ACCESSIBILITY_UNAVAILABLE",
+            accessibilityCapability?.detail ?? "Accessibility awareness is unavailable.",
+          );
+        }
+        return this.accessibilitySnapshotProvider(request.params);
+      }
       case "events.recent": {
         const eventsCapability = this.capabilitiesProvider().find((capability) => capability.id === "events");
         if (eventsCapability?.state !== "ready") {
@@ -608,6 +627,7 @@ export function defaultDesktopCapabilities(
   const screenReady = kdeScreenCaptureAvailable();
   const clipboardReadReady = waylandClipboardReadAvailable();
   const clipboardWriteReady = waylandClipboardWriteAvailable();
+  const accessibilityReady = atspiAccessibilityAvailable();
   const audioReady = pipeWireAudioAwarenessAvailable();
   const devicesReady = linuxDeviceAwarenessAvailable();
   const networkReady = linuxNetworkAwarenessAvailable();
@@ -642,9 +662,9 @@ export function defaultDesktopCapabilities(
     desktopPermissionGranted(permissions, "input")
       ? { id: "input", state: "not_implemented" }
       : disabledCapability("input"),
-    desktopPermissionGranted(permissions, "accessibility")
-      ? { id: "accessibility", state: "not_implemented" }
-      : disabledCapability("accessibility"),
+    permissionAwareCapability(permissions, "accessibility", accessibilityReady,
+      "Bounded read-only AT-SPI semantic tree with roles, states, bounds, interfaces, and action metadata",
+      "AT-SPI accessibility helper or desktop accessibility bus is unavailable"),
     permissionAwareCapability(permissions, "clipboard-read", clipboardReadReady,
       "Wayland text clipboard reads via wl-paste with a 1 MiB payload limit",
       "Wayland wl-paste clipboard access is unavailable"),
@@ -688,6 +708,7 @@ function permissionForDesktopMethod(method: DesktopAgentRequest["method"]): Desk
     case "screen.capture": return "screen";
     case "clipboard.read": return "clipboard-read";
     case "clipboard.write": return "clipboard-write";
+    case "accessibility.snapshot": return "accessibility";
     case "events.recent": return "events";
     case "audio.graph": return "audio";
     case "devices.list": return "devices";

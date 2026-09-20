@@ -65,6 +65,49 @@ export interface DesktopClipboardWriteResult {
   writtenAt: string;
 }
 
+export interface DesktopAccessibilityActionInfo {
+  index: number;
+  name: string;
+  description: string;
+  keyBinding: string;
+}
+
+export interface DesktopAccessibilityBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface DesktopAccessibilityNode {
+  id: string;
+  parentId?: string;
+  depth: number;
+  application: string;
+  accessibleId: string;
+  processId: number;
+  name: string;
+  description: string;
+  role: string;
+  localizedRole: string;
+  childCount: number;
+  states: string[];
+  interfaces: string[];
+  actions: DesktopAccessibilityActionInfo[];
+  bounds?: DesktopAccessibilityBounds;
+  attributes?: Record<string, string>;
+}
+
+export interface DesktopAccessibilitySnapshot {
+  generatedAt: string;
+  applicationCount: number;
+  nodeCount: number;
+  truncated: boolean;
+  maxDepth: number;
+  maxNodes: number;
+  nodes: DesktopAccessibilityNode[];
+}
+
 export interface DesktopAgentStatus {
   state: "ready" | "stopping";
   protocolVersion: number;
@@ -433,6 +476,7 @@ export type DesktopAgentMethod =
   | "screen.capture"
   | "clipboard.read"
   | "clipboard.write"
+  | "accessibility.snapshot"
   | "desktop.stop";
 
 type DesktopAgentRequestBase = {
@@ -441,7 +485,7 @@ type DesktopAgentRequestBase = {
   authToken: string;
 };
 
-type DesktopAgentNoParamsMethod = Exclude<DesktopAgentMethod, "logs.read" | "trace.correlate" | "screen.capture" | "clipboard.write">;
+type DesktopAgentNoParamsMethod = Exclude<DesktopAgentMethod, "logs.read" | "trace.correlate" | "screen.capture" | "clipboard.write" | "accessibility.snapshot">;
 
 export type DesktopAgentRequest = DesktopAgentRequestBase & (
   | {
@@ -472,6 +516,14 @@ export type DesktopAgentRequest = DesktopAgentRequestBase & (
       method: "clipboard.write";
       params: {
         text: string;
+      };
+    }
+  | {
+      method: "accessibility.snapshot";
+      params: {
+        application?: string;
+        maxDepth?: number;
+        maxNodes?: number;
       };
     }
 );
@@ -552,6 +604,32 @@ export function decodeDesktopAgentRequest(value: unknown): DesktopAgentRequest {
       authToken,
       method,
       params: { correlationId, ...(lines === undefined ? {} : { lines }), ...(query === undefined ? {} : { query }) },
+    };
+  }
+  if (method === "accessibility.snapshot") {
+    const allowed = new Set(["application", "maxDepth", "maxNodes"]);
+    if (Object.keys(params).some((key) => !allowed.has(key))) {
+      throw new DesktopAgentProtocolError("INVALID_PARAMS", "accessibility.snapshot received unknown parameters.");
+    }
+    const application = params.application === undefined ? undefined : requiredString(params.application, "accessibility.application");
+    const maxDepth = params.maxDepth === undefined ? undefined : requiredInteger(params.maxDepth, "accessibility.maxDepth");
+    const maxNodes = params.maxNodes === undefined ? undefined : requiredInteger(params.maxNodes, "accessibility.maxNodes");
+    if (maxDepth !== undefined && (maxDepth < 0 || maxDepth > 8)) {
+      throw new DesktopAgentProtocolError("INVALID_PARAMS", "accessibility.maxDepth must be between 0 and 8.");
+    }
+    if (maxNodes !== undefined && (maxNodes < 1 || maxNodes > 500)) {
+      throw new DesktopAgentProtocolError("INVALID_PARAMS", "accessibility.maxNodes must be between 1 and 500.");
+    }
+    return {
+      requestId,
+      protocolVersion,
+      authToken,
+      method,
+      params: {
+        ...(application === undefined ? {} : { application }),
+        ...(maxDepth === undefined ? {} : { maxDepth }),
+        ...(maxNodes === undefined ? {} : { maxNodes }),
+      },
     };
   }
   if (method === "clipboard.write") {
@@ -764,6 +842,67 @@ export function decodeDesktopClipboardWriteResult(value: unknown): DesktopClipbo
     bytes,
     mimeType: requiredString(record.mimeType, "clipboard.mimeType"),
     writtenAt: requiredString(record.writtenAt, "clipboard.writtenAt"),
+  };
+}
+
+export function decodeDesktopAccessibilitySnapshot(value: unknown): DesktopAccessibilitySnapshot {
+  const record = asRecord(value);
+  if (!record || !Array.isArray(record.nodes)) {
+    throw new DesktopAgentProtocolError("INVALID_ACCESSIBILITY", "Desktop agent returned an invalid accessibility snapshot.");
+  }
+  const nodes = record.nodes.map((value) => {
+    const node = asRecord(value);
+    if (!node || !Array.isArray(node.actions)) {
+      throw new DesktopAgentProtocolError("INVALID_ACCESSIBILITY", "Accessibility node must be an object with actions.");
+    }
+    const boundsRecord = node.bounds === null || node.bounds === undefined ? undefined : asRecord(node.bounds);
+    const attributesRecord = node.attributes === undefined ? undefined : asRecord(node.attributes);
+    const attributes = attributesRecord
+      ? Object.fromEntries(Object.entries(attributesRecord).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
+      : undefined;
+    return {
+      id: requiredString(node.id, "accessibility.node.id"),
+      parentId: optionalString(node.parentId),
+      depth: requiredInteger(node.depth, "accessibility.node.depth"),
+      application: requiredString(node.application, "accessibility.node.application"),
+      accessibleId: typeof node.accessibleId === "string" ? node.accessibleId : "",
+      processId: requiredInteger(node.processId, "accessibility.node.processId"),
+      name: typeof node.name === "string" ? node.name : "",
+      description: typeof node.description === "string" ? node.description : "",
+      role: requiredString(node.role, "accessibility.node.role"),
+      localizedRole: typeof node.localizedRole === "string" ? node.localizedRole : "",
+      childCount: requiredInteger(node.childCount, "accessibility.node.childCount"),
+      states: stringArray(node.states, "accessibility.node.states"),
+      interfaces: stringArray(node.interfaces, "accessibility.node.interfaces"),
+      actions: node.actions.map((actionValue) => {
+        const action = asRecord(actionValue);
+        if (!action) throw new DesktopAgentProtocolError("INVALID_ACCESSIBILITY", "Accessibility action must be an object.");
+        return {
+          index: requiredInteger(action.index, "accessibility.action.index"),
+          name: typeof action.name === "string" ? action.name : "",
+          description: typeof action.description === "string" ? action.description : "",
+          keyBinding: typeof action.keyBinding === "string" ? action.keyBinding : "",
+        };
+      }),
+      ...(boundsRecord ? {
+        bounds: {
+          x: requiredInteger(boundsRecord.x, "accessibility.bounds.x"),
+          y: requiredInteger(boundsRecord.y, "accessibility.bounds.y"),
+          width: requiredInteger(boundsRecord.width, "accessibility.bounds.width"),
+          height: requiredInteger(boundsRecord.height, "accessibility.bounds.height"),
+        },
+      } : {}),
+      ...(attributes && Object.keys(attributes).length > 0 ? { attributes } : {}),
+    } satisfies DesktopAccessibilityNode;
+  });
+  return {
+    generatedAt: requiredString(record.generatedAt, "accessibility.generatedAt"),
+    applicationCount: requiredInteger(record.applicationCount, "accessibility.applicationCount"),
+    nodeCount: requiredInteger(record.nodeCount, "accessibility.nodeCount"),
+    truncated: requiredBoolean(record.truncated, "accessibility.truncated"),
+    maxDepth: requiredInteger(record.maxDepth, "accessibility.maxDepth"),
+    maxNodes: requiredInteger(record.maxNodes, "accessibility.maxNodes"),
+    nodes,
   };
 }
 
@@ -1304,6 +1443,7 @@ function isDesktopAgentMethod(value: string): value is DesktopAgentMethod {
     || value === "screen.capture"
     || value === "clipboard.read"
     || value === "clipboard.write"
+    || value === "accessibility.snapshot"
     || value === "desktop.stop";
 }
 

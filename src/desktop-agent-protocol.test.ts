@@ -22,6 +22,7 @@ import {
   decodeDesktopScreenCapture,
   decodeDesktopClipboardReadResult,
   decodeDesktopClipboardWriteResult,
+  decodeDesktopAccessibilitySnapshot,
   decodeDesktopWindowList,
   encodeDesktopAgentRequest,
   type DesktopAgentRequest,
@@ -141,6 +142,25 @@ test("desktop agent accepts clipboard read and write requests", () => {
   assert.throws(
     () => decodeDesktopAgentRequest({ ...writeRequest, params: { text: "hello", path: "/tmp/x" } }),
     /unknown parameters/,
+  );
+});
+
+test("desktop agent accepts bounded accessibility snapshot requests", () => {
+  const request: DesktopAgentRequest = {
+    requestId: "request-accessibility",
+    protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
+    authToken: "a".repeat(64),
+    method: "accessibility.snapshot",
+    params: { application: "Example", maxDepth: 3, maxNodes: 120 },
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
+  assert.throws(
+    () => decodeDesktopAgentRequest({ ...request, params: { maxDepth: 9 } }),
+    /maxDepth must be between 0 and 8/,
+  );
+  assert.throws(
+    () => decodeDesktopAgentRequest({ ...request, params: { maxNodes: 0 } }),
+    /maxNodes must be between 1 and 500/,
   );
 });
 
@@ -295,6 +315,36 @@ test("desktop agent decodes structured clipboard results", () => {
   });
   assert.equal(write.bytes, 15);
   assert.equal(write.mimeType, "text/plain;charset=utf-8");
+});
+
+test("desktop agent decodes a structured accessibility snapshot", () => {
+  const snapshot = decodeDesktopAccessibilitySnapshot({
+    generatedAt: "2026-09-20T12:00:00.000Z",
+    applicationCount: 1,
+    nodeCount: 1,
+    truncated: false,
+    maxDepth: 4,
+    maxNodes: 200,
+    nodes: [{
+      id: "app-0",
+      depth: 0,
+      application: "Example",
+      accessibleId: "org.example.App",
+      processId: 123,
+      name: "Example",
+      description: "",
+      role: "application",
+      localizedRole: "application",
+      childCount: 0,
+      states: ["enabled", "visible"],
+      interfaces: ["Accessible", "Application"],
+      actions: [{ index: 0, name: "activate", description: "", keyBinding: "" }],
+      bounds: { x: 0, y: 0, width: 800, height: 600 },
+    }],
+  });
+  assert.equal(snapshot.nodes[0]?.role, "application");
+  assert.equal(snapshot.nodes[0]?.processId, 123);
+  assert.equal(snapshot.nodes[0]?.actions[0]?.name, "activate");
 });
 
 test("desktop agent decodes a structured window list", () => {

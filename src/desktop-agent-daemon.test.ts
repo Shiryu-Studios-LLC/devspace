@@ -287,6 +287,63 @@ test("desktop agent serves clipboard text and enforces read/write permissions in
   assert.equal(writeCalls, 1);
 });
 
+test("desktop agent serves bounded accessibility snapshots and enforces accessibility permission", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-accessibility-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const permissions = defaultDesktopPermissionPolicy();
+  permissions.accessibility = false;
+  let snapshotCalls = 0;
+  const daemon = new DesktopAgentDaemon({
+    stateDir,
+    permissions,
+    capabilities: () => [{ id: "accessibility", state: "ready" }],
+    accessibilitySnapshot: async (options) => {
+      snapshotCalls += 1;
+      return {
+        generatedAt: "2026-09-20T12:00:00.000Z",
+        applicationCount: 1,
+        nodeCount: 1,
+        truncated: false,
+        maxDepth: options?.maxDepth ?? 4,
+        maxNodes: options?.maxNodes ?? 200,
+        nodes: [{
+          id: "app-0",
+          depth: 0,
+          application: "Example",
+          accessibleId: "org.example.App",
+          processId: 123,
+          name: "Example",
+          description: "",
+          role: "application",
+          localizedRole: "application",
+          childCount: 0,
+          states: ["enabled", "visible"],
+          interfaces: ["Accessible", "Application"],
+          actions: [],
+          bounds: { x: 0, y: 0, width: 800, height: 600 },
+        }],
+      };
+    },
+  });
+  t.after(() => daemon.close());
+  await daemon.start();
+  const client = new DesktopAgentClient({
+    stateDir,
+    spawnDaemon: () => assert.fail("existing daemon should not be respawned"),
+  });
+
+  await assert.rejects(() => client.accessibilitySnapshot(), (error: unknown) => (
+    error instanceof DesktopAgentClientError && error.code === "DESKTOP_PERMISSION_DENIED"
+  ));
+  assert.equal(snapshotCalls, 0);
+
+  daemon.updatePermissions(defaultDesktopPermissionPolicy());
+  const snapshot = await client.accessibilitySnapshot({ application: "Example", maxDepth: 2, maxNodes: 50 });
+  assert.equal(snapshot.nodeCount, 1);
+  assert.equal(snapshot.nodes[0]?.role, "application");
+  assert.equal(snapshotCalls, 1);
+});
+
 test("desktop agent enforces denied permissions before providers run", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-permissions-"));
   t.after(() => rm(stateDir, { recursive: true, force: true }));
