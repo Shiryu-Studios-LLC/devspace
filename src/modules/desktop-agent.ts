@@ -1,5 +1,7 @@
 import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { readFile, rm, stat } from "node:fs/promises";
+import { isAbsolute, relative, resolve } from "node:path";
 import * as z from "zod/v4";
 import type { ServerConfig } from "../config.js";
 import {
@@ -21,6 +23,7 @@ import type {
   DesktopLogSource,
   DesktopTraceCorrelation,
   DesktopProcessInfo,
+  DesktopScreenCapture,
   DesktopWindowInfo,
 } from "../desktop-agent-protocol.js";
 
@@ -296,6 +299,88 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
         };
       } catch (error) {
         return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "desktop_capture_screen",
+    {
+      title: "Capture Desktop Screen",
+      description:
+        "Capture a KDE/Wayland workspace, screen, active screen, window, active window, or rectangular area through the isolated Desktop Agent. The PNG is returned once as MCP image content and the private temporary capture file is deleted immediately afterward.",
+      inputSchema: {
+        target: z.enum(["workspace", "active-screen", "screen", "active-window", "window", "area"]),
+        screen: z.string().min(1).optional(),
+        windowId: z.string().min(1).optional(),
+        x: z.number().int().optional(),
+        y: z.number().int().optional(),
+        width: z.number().int().positive().optional(),
+        height: z.number().int().positive().optional(),
+        includeCursor: z.boolean().optional(),
+        includeDecoration: z.boolean().optional(),
+        includeShadow: z.boolean().optional(),
+        nativeResolution: z.boolean().optional(),
+        hideCallerWindows: z.boolean().optional(),
+      },
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        capture: z.object({
+          mimeType: z.literal("image/png"),
+          target: z.enum(["workspace", "active-screen", "screen", "active-window", "window", "area"]),
+          width: z.number().int().positive(),
+          height: z.number().int().positive(),
+          scale: z.number().positive(),
+          capturedAt: z.string(),
+          screen: z.string().optional(),
+          windowId: z.string().optional(),
+          x: z.number().int().optional(),
+          y: z.number().int().optional(),
+          bytes: z.number().int().positive(),
+        }).optional(),
+      },
+      _meta: {},
+      annotations: readAnnotations,
+    },
+    async (input) => {
+      let capture: DesktopScreenCapture | undefined;
+      let capturePath: string | undefined;
+      try {
+        capture = await client.captureScreen(input);
+        capturePath = validatePrivateCapturePath(config.stateDir, capture.path);
+        const info = await stat(capturePath);
+        const maxBytes = 64 * 1024 * 1024;
+        if (!info.isFile() || info.size <= 0 || info.size > maxBytes) {
+          throw new Error(`Desktop screenshot PNG has invalid size: ${info.size}.`);
+        }
+        const data = await readFile(capturePath);
+        const metadata = {
+          mimeType: capture.mimeType,
+          target: capture.target,
+          width: capture.width,
+          height: capture.height,
+          scale: capture.scale,
+          capturedAt: capture.capturedAt,
+          ...(capture.screen ? { screen: capture.screen } : {}),
+          ...(capture.windowId ? { windowId: capture.windowId } : {}),
+          ...(capture.x === undefined ? {} : { x: capture.x }),
+          ...(capture.y === undefined ? {} : { y: capture.y }),
+          bytes: data.byteLength,
+        };
+        const result = formatScreenCaptureSummary(metadata);
+        return {
+          content: [
+            { type: "text" as const, text: result },
+            { type: "image" as const, data: data.toString("base64"), mimeType: "image/png" as const },
+          ],
+          structuredContent: { status: "ready" as const, result, capture: metadata },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      } finally {
+        if (capturePath) await rm(capturePath, { force: true }).catch(() => undefined);
       }
     },
   );
@@ -871,6 +956,26 @@ function clientErrorResponse(error: unknown) {
     structuredContent: { status: "error" as const, result },
     isError: true,
   };
+}
+
+function validatePrivateCapturePath(stateDir: string, path: string): string {
+  const captureDir = resolve(stateDir, "desktop-agent", "captures");
+  const candidate = resolve(path);
+  const relativePath = relative(captureDir, candidate);
+  if (!relativePath || relativePath.startsWith("..") || isAbsolute(relativePath)) {
+    throw new Error("Desktop agent returned a screenshot path outside its private capture directory.");
+  }
+  return candidate;
+}
+
+function formatScreenCaptureSummary(capture: {
+  target: string;
+  width: number;
+  height: number;
+  scale: number;
+  bytes: number;
+}): string {
+  return `Captured ${capture.target} as ${capture.width}×${capture.height} PNG at scale ${capture.scale}; ${capture.bytes} byte(s).`;
 }
 
 function describeStatus(status: DesktopAgentStatus): string {

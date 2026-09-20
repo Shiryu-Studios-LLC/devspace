@@ -1,8 +1,12 @@
 #!/usr/bin/env node
-import { cp, copyFile, mkdir, readFile, rename, rm, stat } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { cp, copyFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sourceDist = join(repoRoot, "dist");
@@ -27,6 +31,7 @@ await cp(sourceDist, targetDist, {
   force: true,
   filter: (source) => basename(source) !== "hot-modules.mjs",
 });
+const screenshotAuthorization = await installScreenshotAuthorization(targetDist);
 
 const activationTemp = join(targetDist, `.hot-modules.${process.pid}.${Date.now()}.tmp`);
 try {
@@ -43,11 +48,58 @@ console.log(JSON.stringify({
   activation: targetHotBundle,
   coreRestarted: false,
   desktopAgentRecycled: recycledDesktopAgent,
+  screenshotAuthorization,
 }));
 
 async function assertFile(path, message) {
   const value = await stat(path).catch(() => undefined);
   if (!value?.isFile()) throw new Error(`${message} Missing: ${path}`);
+}
+
+async function installScreenshotAuthorization(distDir) {
+  if (process.platform !== "linux") return { installed: false, cacheRefreshed: false };
+  const helper = join(distDir, "bin", "devspace-screenshot-helper");
+  const helperStat = await stat(helper).catch(() => undefined);
+  if (!helperStat?.isFile()) return { installed: false, cacheRefreshed: false };
+  if (/[\r\n]/.test(helper)) throw new Error("Invalid screenshot helper path.");
+
+  const applicationsDir = join(homedir(), ".local", "share", "applications");
+  const desktopPath = join(applicationsDir, "org.shiryustudios.DevSpace.ScreenshotHelper.desktop");
+  const desktopTemp = `${desktopPath}.${process.pid}.${Date.now()}.tmp`;
+  const quotedHelper = `"${helper.replace(/[\\"`$]/g, "\\$&")}"`;
+  const desktopEntry = [
+    "[Desktop Entry]",
+    "Type=Application",
+    "Name=DevSpace Screenshot Helper",
+    `Exec=${quotedHelper}`,
+    "NoDisplay=true",
+    "Terminal=false",
+    "X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2",
+    "",
+  ].join("\n");
+  await mkdir(applicationsDir, { recursive: true });
+  try {
+    await writeFile(desktopTemp, desktopEntry, { mode: 0o600 });
+    await rename(desktopTemp, desktopPath);
+  } finally {
+    await rm(desktopTemp, { force: true }).catch(() => undefined);
+  }
+
+  let cacheRefreshed = false;
+  const cacheBuilder = "/usr/bin/kbuildsycoca6";
+  if ((await stat(cacheBuilder).catch(() => undefined))?.isFile()) {
+    try {
+      await execFileAsync(cacheBuilder, ["--noincremental"], {
+        encoding: "utf8",
+        maxBuffer: 4 * 1024 * 1024,
+        env: process.env,
+      });
+      cacheRefreshed = true;
+    } catch {
+      // KDE can still discover the desktop entry on its next cache refresh.
+    }
+  }
+  return { installed: true, cacheRefreshed, desktopPath, helper };
 }
 
 async function recycleDesktopAgent() {

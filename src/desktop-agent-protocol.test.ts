@@ -19,6 +19,7 @@ import {
   decodeDesktopLogSources,
   decodeDesktopTraceCorrelation,
   decodeDesktopProcessList,
+  decodeDesktopScreenCapture,
   decodeDesktopWindowList,
   encodeDesktopAgentRequest,
   type DesktopAgentRequest,
@@ -84,6 +85,33 @@ test("desktop agent accepts the read-only processes list method", () => {
     params: {},
   };
   assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
+});
+
+test("desktop agent accepts validated screen capture requests", () => {
+  const request: DesktopAgentRequest = {
+    requestId: "request-screen",
+    protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
+    authToken: "a".repeat(64),
+    method: "screen.capture",
+    params: {
+      target: "area",
+      x: 10,
+      y: 20,
+      width: 320,
+      height: 180,
+      includeCursor: true,
+      nativeResolution: false,
+    },
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
+  assert.throws(
+    () => decodeDesktopAgentRequest({ ...request, params: { target: "window" } }),
+    /requires windowId/,
+  );
+  assert.throws(
+    () => decodeDesktopAgentRequest({ ...request, params: { target: "area", x: 0, y: 0, width: 0, height: 10 } }),
+    /positive width\/height/,
+  );
 });
 
 test("desktop agent accepts the recent activity method", () => {
@@ -195,6 +223,22 @@ test("desktop agent protocol rejects unknown methods", () => {
     }),
     /Unknown desktop agent method/,
   );
+});
+
+test("desktop agent decodes a structured screen capture", () => {
+  const capture = decodeDesktopScreenCapture({
+    path: "/private/captures/example.png",
+    mimeType: "image/png",
+    target: "window",
+    width: 1200,
+    height: 800,
+    scale: 1.25,
+    capturedAt: "2026-09-20T12:00:00.000Z",
+    windowId: "{11111111-2222-3333-4444-555555555555}",
+  });
+  assert.equal(capture.target, "window");
+  assert.equal(capture.width, 1200);
+  assert.equal(capture.windowId, "{11111111-2222-3333-4444-555555555555}");
 });
 
 test("desktop agent decodes a structured window list", () => {

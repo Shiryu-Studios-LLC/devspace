@@ -14,6 +14,43 @@ export interface DesktopPermissionStatus {
   defaultGranted: boolean;
 }
 
+export type DesktopScreenCaptureTarget =
+  | "workspace"
+  | "active-screen"
+  | "screen"
+  | "active-window"
+  | "window"
+  | "area";
+
+export interface DesktopScreenCaptureRequest {
+  target: DesktopScreenCaptureTarget;
+  screen?: string;
+  windowId?: string;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  includeCursor?: boolean;
+  includeDecoration?: boolean;
+  includeShadow?: boolean;
+  nativeResolution?: boolean;
+  hideCallerWindows?: boolean;
+}
+
+export interface DesktopScreenCapture {
+  path: string;
+  mimeType: "image/png";
+  target: DesktopScreenCaptureTarget;
+  width: number;
+  height: number;
+  scale: number;
+  capturedAt: string;
+  screen?: string;
+  windowId?: string;
+  x?: number;
+  y?: number;
+}
+
 export interface DesktopAgentStatus {
   state: "ready" | "stopping";
   protocolVersion: number;
@@ -379,6 +416,7 @@ export type DesktopAgentMethod =
   | "logs.read"
   | "trace.correlate"
   | "notifications.recent"
+  | "screen.capture"
   | "desktop.stop";
 
 type DesktopAgentRequestBase = {
@@ -387,7 +425,7 @@ type DesktopAgentRequestBase = {
   authToken: string;
 };
 
-type DesktopAgentNoParamsMethod = Exclude<DesktopAgentMethod, "logs.read" | "trace.correlate">;
+type DesktopAgentNoParamsMethod = Exclude<DesktopAgentMethod, "logs.read" | "trace.correlate" | "screen.capture">;
 
 export type DesktopAgentRequest = DesktopAgentRequestBase & (
   | {
@@ -409,6 +447,10 @@ export type DesktopAgentRequest = DesktopAgentRequestBase & (
         lines?: number;
         query?: string;
       };
+    }
+  | {
+      method: "screen.capture";
+      params: DesktopScreenCaptureRequest;
     }
 );
 
@@ -490,6 +532,69 @@ export function decodeDesktopAgentRequest(value: unknown): DesktopAgentRequest {
       params: { correlationId, ...(lines === undefined ? {} : { lines }), ...(query === undefined ? {} : { query }) },
     };
   }
+  if (method === "screen.capture") {
+    const target = requiredString(params.target, "screen.target") as DesktopScreenCaptureTarget;
+    if (!isDesktopScreenCaptureTarget(target)) {
+      throw new DesktopAgentProtocolError("INVALID_PARAMS", `Unknown screen capture target: ${target}`);
+    }
+    const allowed = new Set([
+      "target",
+      "screen",
+      "windowId",
+      "x",
+      "y",
+      "width",
+      "height",
+      "includeCursor",
+      "includeDecoration",
+      "includeShadow",
+      "nativeResolution",
+      "hideCallerWindows",
+    ]);
+    if (Object.keys(params).some((key) => !allowed.has(key))) {
+      throw new DesktopAgentProtocolError("INVALID_PARAMS", "screen.capture received unknown parameters.");
+    }
+    const screen = params.screen === undefined ? undefined : requiredString(params.screen, "screen.screen");
+    const windowId = params.windowId === undefined ? undefined : requiredString(params.windowId, "screen.windowId");
+    const x = params.x === undefined ? undefined : requiredInteger(params.x, "screen.x");
+    const y = params.y === undefined ? undefined : requiredInteger(params.y, "screen.y");
+    const width = params.width === undefined ? undefined : requiredInteger(params.width, "screen.width");
+    const height = params.height === undefined ? undefined : requiredInteger(params.height, "screen.height");
+    if (target === "screen" && !screen) {
+      throw new DesktopAgentProtocolError("INVALID_PARAMS", "screen.capture target=screen requires screen.");
+    }
+    if (target === "window" && !windowId) {
+      throw new DesktopAgentProtocolError("INVALID_PARAMS", "screen.capture target=window requires windowId.");
+    }
+    if (target === "area" && (
+      x === undefined || y === undefined || width === undefined || height === undefined || width <= 0 || height <= 0
+    )) {
+      throw new DesktopAgentProtocolError(
+        "INVALID_PARAMS",
+        "screen.capture target=area requires integer x/y and positive width/height.",
+      );
+    }
+    return {
+      requestId,
+      protocolVersion,
+      authToken,
+      method,
+      params: {
+        target,
+        ...(screen === undefined ? {} : { screen }),
+        ...(windowId === undefined ? {} : { windowId }),
+        ...(x === undefined ? {} : { x }),
+        ...(y === undefined ? {} : { y }),
+        ...(width === undefined ? {} : { width }),
+        ...(height === undefined ? {} : { height }),
+        ...(params.includeCursor === undefined ? {} : { includeCursor: requiredRequestBoolean(params.includeCursor, "screen.includeCursor") }),
+        ...(params.includeDecoration === undefined ? {} : { includeDecoration: requiredRequestBoolean(params.includeDecoration, "screen.includeDecoration") }),
+        ...(params.includeShadow === undefined ? {} : { includeShadow: requiredRequestBoolean(params.includeShadow, "screen.includeShadow") }),
+        ...(params.nativeResolution === undefined ? {} : { nativeResolution: requiredRequestBoolean(params.nativeResolution, "screen.nativeResolution") }),
+        ...(params.hideCallerWindows === undefined ? {} : { hideCallerWindows: requiredRequestBoolean(params.hideCallerWindows, "screen.hideCallerWindows") }),
+      },
+    };
+  }
   if (Object.keys(params).length !== 0) {
     throw new DesktopAgentProtocolError("INVALID_PARAMS", `${method} does not accept parameters.`);
   }
@@ -555,6 +660,34 @@ export function decodeDesktopPermissionStatuses(value: unknown): DesktopPermissi
       defaultGranted: requiredBoolean(record.defaultGranted, "permission.defaultGranted"),
     };
   });
+}
+
+export function decodeDesktopScreenCapture(value: unknown): DesktopScreenCapture {
+  const record = asRecord(value);
+  if (!record) {
+    throw new DesktopAgentProtocolError("INVALID_SCREEN_CAPTURE", "Desktop agent returned an invalid screen capture.");
+  }
+  const target = requiredString(record.target, "screenCapture.target") as DesktopScreenCaptureTarget;
+  if (!isDesktopScreenCaptureTarget(target)) {
+    throw new DesktopAgentProtocolError("INVALID_SCREEN_CAPTURE", `Invalid screen capture target: ${target}`);
+  }
+  const mimeType = requiredString(record.mimeType, "screenCapture.mimeType");
+  if (mimeType !== "image/png") {
+    throw new DesktopAgentProtocolError("INVALID_SCREEN_CAPTURE", `Unsupported screen capture MIME type: ${mimeType}`);
+  }
+  return {
+    path: requiredString(record.path, "screenCapture.path"),
+    mimeType,
+    target,
+    width: requiredInteger(record.width, "screenCapture.width"),
+    height: requiredInteger(record.height, "screenCapture.height"),
+    scale: requiredNumber(record.scale, "screenCapture.scale"),
+    capturedAt: requiredString(record.capturedAt, "screenCapture.capturedAt"),
+    screen: optionalString(record.screen),
+    windowId: optionalString(record.windowId),
+    x: optionalInteger(record.x),
+    y: optionalInteger(record.y),
+  };
 }
 
 export function decodeDesktopWindowList(value: unknown): DesktopWindowInfo[] {
@@ -1091,7 +1224,17 @@ function isDesktopAgentMethod(value: string): value is DesktopAgentMethod {
     || value === "logs.read"
     || value === "trace.correlate"
     || value === "notifications.recent"
+    || value === "screen.capture"
     || value === "desktop.stop";
+}
+
+function isDesktopScreenCaptureTarget(value: string): value is DesktopScreenCaptureTarget {
+  return value === "workspace"
+    || value === "active-screen"
+    || value === "screen"
+    || value === "active-window"
+    || value === "window"
+    || value === "area";
 }
 
 function isDesktopActivityEventType(value: string): value is DesktopActivityEventType {
@@ -1151,6 +1294,13 @@ function requiredInteger(value: unknown, field: string): number {
 
 function optionalBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
+}
+
+function requiredRequestBoolean(value: unknown, field: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new DesktopAgentProtocolError("INVALID_REQUEST", `Invalid ${field}.`);
+  }
+  return value;
 }
 
 function requiredBoolean(value: unknown, field: string): boolean {

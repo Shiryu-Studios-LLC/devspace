@@ -59,7 +59,7 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [x] KDE monitor/display awareness using KScreen JSON plus KWin active-output state, including layout, scale, modes, refresh rate, physical size, priority, brightness, and active/primary status.
 - [x] Read-only KDE virtual desktop awareness, including desktop IDs/names/order, current desktop, rows, and navigation wrapping state.
 - [x] Structured Linux process/application awareness using `/proc`, correlated with KWin window ownership while excluding command-line arguments and environment variables.
-- [ ] Screenshot/window/region capture.
+- [x] KDE/Wayland screenshot capture for workspace, named/active screen, named/active window, and rectangular areas via a narrowly authorized KWin ScreenShot2 helper; captures are private temporary PNGs deleted after MCP delivery.
 - [ ] AT-SPI accessibility tree and semantic UI actions.
 - [ ] Keyboard/mouse input control.
 - [ ] Clipboard read/write with explicit permissions.

@@ -25,6 +25,7 @@ import {
   decodeDesktopLogSources,
   decodeDesktopTraceCorrelation,
   decodeDesktopProcessList,
+  decodeDesktopScreenCapture,
   decodeDesktopWindowList,
   encodeDesktopAgentRequest,
   type DesktopActivityTimeline,
@@ -44,6 +45,8 @@ import {
   type DesktopLogSource,
   type DesktopTraceCorrelation,
   type DesktopProcessInfo,
+  type DesktopScreenCapture,
+  type DesktopScreenCaptureRequest,
   type DesktopWindowInfo,
 } from "./desktop-agent-protocol.js";
 
@@ -124,6 +127,10 @@ export class DesktopAgentClient {
 
   async processes(): Promise<DesktopProcessInfo[]> {
     return decodeDesktopProcessList(await this.requestReady("processes.list"));
+  }
+
+  async captureScreen(request: DesktopScreenCaptureRequest): Promise<DesktopScreenCapture> {
+    return decodeDesktopScreenCapture(await this.requestReady("screen.capture", { ...request }));
   }
 
   async recentActivity(): Promise<DesktopActivityTimeline> {

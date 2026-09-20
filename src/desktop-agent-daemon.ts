@@ -67,6 +67,8 @@ import {
   type DesktopLogSource,
   type DesktopTraceCorrelation,
   type DesktopProcessInfo,
+  type DesktopScreenCapture,
+  type DesktopScreenCaptureRequest,
   type DesktopWindowInfo,
 } from "./desktop-agent-protocol.js";
 import {
@@ -81,6 +83,10 @@ import {
   linuxProcessAwarenessAvailable,
   listLinuxProcesses,
 } from "./desktop-processes-linux.js";
+import {
+  createKdeScreenCaptureProvider,
+  kdeScreenCaptureAvailable,
+} from "./desktop-screenshot-kde.js";
 
 const MAX_REQUEST_BYTES = 128 * 1024;
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -93,6 +99,7 @@ export interface DesktopAgentDaemonOptions {
   windows?: () => Promise<DesktopWindowInfo[]>;
   displays?: () => Promise<DesktopDisplayInfo[]>;
   processes?: () => Promise<DesktopProcessInfo[]>;
+  screenCapture?: (request: DesktopScreenCaptureRequest) => Promise<DesktopScreenCapture>;
   audioGraph?: () => Promise<DesktopAudioGraph>;
   devices?: () => Promise<DesktopDeviceInfo[]>;
   networkSnapshot?: () => Promise<DesktopNetworkSnapshot>;
@@ -115,6 +122,7 @@ export class DesktopAgentDaemon {
   private readonly windowsProvider: () => Promise<DesktopWindowInfo[]>;
   private readonly displaysProvider: () => Promise<DesktopDisplayInfo[]>;
   private readonly processesProvider: () => Promise<DesktopProcessInfo[]>;
+  private readonly screenCaptureProvider: (request: DesktopScreenCaptureRequest) => Promise<DesktopScreenCapture>;
   private readonly audioGraphProvider: () => Promise<DesktopAudioGraph>;
   private readonly devicesProvider: () => Promise<DesktopDeviceInfo[]>;
   private readonly networkSnapshotProvider: () => Promise<DesktopNetworkSnapshot>;
@@ -143,6 +151,7 @@ export class DesktopAgentDaemon {
     this.windowsProvider = options.windows ?? listKdeWindows;
     this.displaysProvider = options.displays ?? listKdeDisplays;
     this.processesProvider = options.processes ?? (() => defaultProcessInventory(desktopPermissionGranted(this.permissionPolicy, "windows")));
+    this.screenCaptureProvider = options.screenCapture ?? createKdeScreenCaptureProvider(this.paths.stateDir, { now: options.now });
     this.audioGraphProvider = options.audioGraph ?? getPipeWireAudioGraph;
     this.devicesProvider = options.devices ?? listLinuxDevices;
     this.networkSnapshotProvider = options.networkSnapshot ?? getLinuxNetworkSnapshot;
@@ -403,6 +412,16 @@ export class DesktopAgentDaemon {
         }
         return this.processesProvider();
       }
+      case "screen.capture": {
+        const screenCapability = this.capabilitiesProvider().find((capability) => capability.id === "screen");
+        if (screenCapability?.state !== "ready") {
+          throw new DesktopAgentProtocolError(
+            "DESKTOP_SCREEN_UNAVAILABLE",
+            screenCapability?.detail ?? "Screen capture is unavailable.",
+          );
+        }
+        return this.screenCaptureProvider(request.params);
+      }
       case "events.recent": {
         const eventsCapability = this.capabilitiesProvider().find((capability) => capability.id === "events");
         if (eventsCapability?.state !== "ready") {
@@ -552,6 +571,7 @@ export function defaultDesktopCapabilities(
   const windowsReady = kdeWindowAwarenessAvailable();
   const displaysReady = kdeDisplayAwarenessAvailable();
   const processesReady = linuxProcessAwarenessAvailable();
+  const screenReady = kdeScreenCaptureAvailable();
   const audioReady = pipeWireAudioAwarenessAvailable();
   const devicesReady = linuxDeviceAwarenessAvailable();
   const networkReady = linuxNetworkAwarenessAvailable();
@@ -580,9 +600,9 @@ export function defaultDesktopCapabilities(
       "KDE KScreen display inventory", "KDE KScreen graphical session is unavailable"),
     permissionAwareCapability(permissions, "processes", processesReady,
       "Linux /proc process inventory without command-line arguments or environment data", "Linux /proc is unavailable"),
-    desktopPermissionGranted(permissions, "screen")
-      ? { id: "screen", state: "not_implemented" }
-      : disabledCapability("screen"),
+    permissionAwareCapability(permissions, "screen", screenReady,
+      "KDE/KWin native workspace, screen, window, active-window, and rectangular PNG capture",
+      "KDE/KWin ScreenShot2 capture helper is unavailable"),
     desktopPermissionGranted(permissions, "input")
       ? { id: "input", state: "not_implemented" }
       : disabledCapability("input"),
@@ -626,6 +646,7 @@ function permissionForDesktopMethod(method: DesktopAgentRequest["method"]): Desk
     case "windows.list": return "windows";
     case "displays.list": return "displays";
     case "processes.list": return "processes";
+    case "screen.capture": return "screen";
     case "events.recent": return "events";
     case "audio.graph": return "audio";
     case "devices.list": return "devices";

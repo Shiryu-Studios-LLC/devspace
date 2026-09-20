@@ -199,6 +199,40 @@ test("desktop agent hot-applies permission changes without restarting", async (t
   assert.equal((await client.status())?.pid, started.pid);
 });
 
+test("desktop agent serves structured screen captures through the screen permission", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-screen-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  let receivedTarget = "";
+  const daemon = new DesktopAgentDaemon({
+    stateDir,
+    capabilities: () => [{ id: "screen", state: "ready" }],
+    screenCapture: async (request) => {
+      receivedTarget = request.target;
+      return {
+        path: join(stateDir, "desktop-agent", "captures", "fixture.png"),
+        mimeType: "image/png",
+        target: request.target,
+        width: 640,
+        height: 360,
+        scale: 1,
+        capturedAt: "2026-09-20T12:00:00.000Z",
+      };
+    },
+  });
+  t.after(() => daemon.close());
+  await daemon.start();
+  const client = new DesktopAgentClient({
+    stateDir,
+    spawnDaemon: () => assert.fail("existing daemon should not be respawned"),
+  });
+
+  const capture = await client.captureScreen({ target: "active-window", includeCursor: true });
+  assert.equal(receivedTarget, "active-window");
+  assert.equal(capture.target, "active-window");
+  assert.equal(capture.width, 640);
+  assert.equal(capture.mimeType, "image/png");
+});
+
 test("desktop agent enforces denied permissions before providers run", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-permissions-"));
   t.after(() => rm(stateDir, { recursive: true, force: true }));
