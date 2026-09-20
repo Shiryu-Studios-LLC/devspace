@@ -108,7 +108,7 @@ export interface DesktopAgentDaemonOptions {
 export class DesktopAgentDaemon {
   readonly paths: DesktopAgentPaths;
   private readonly lock: DesktopAgentLock;
-  private readonly permissionPolicy: DesktopPermissionPolicy;
+  private permissionPolicy: DesktopPermissionPolicy;
   private readonly capabilitiesProvider: () => DesktopCapabilityStatus[];
   private readonly windowsProvider: () => Promise<DesktopWindowInfo[]>;
   private readonly displaysProvider: () => Promise<DesktopDisplayInfo[]>;
@@ -151,25 +151,23 @@ export class DesktopAgentDaemon {
     this.notificationMonitor = options.notificationMonitor ?? (options.notifications ? undefined : new LinuxNotificationMonitor({ now: options.now }));
     this.notificationsProvider = options.notifications ?? (() => Promise.resolve(this.notificationMonitor?.recent() ?? []));
     this.activityMonitor = options.activityMonitor ?? new DesktopActivityMonitor({
-      windows: desktopPermissionGranted(this.permissionPolicy, "windows") ? this.windowsProvider : async () => [],
-      displays: desktopPermissionGranted(this.permissionPolicy, "displays") ? this.displaysProvider : async () => [],
-      processes: desktopPermissionGranted(this.permissionPolicy, "processes")
-        ? (options.processes ?? (() => listLinuxProcesses([])))
-        : async () => [],
-      audio: desktopPermissionGranted(this.permissionPolicy, "audio")
-        ? (options.audioGraph ?? (pipeWireAudioAwarenessAvailable() ? this.audioGraphProvider : undefined))
+      windows: () => this.permissionAware("windows", this.windowsProvider),
+      displays: () => this.permissionAware("displays", this.displaysProvider),
+      processes: () => this.permissionAware("processes", options.processes ?? (() => listLinuxProcesses([]))),
+      audio: pipeWireAudioAwarenessAvailable()
+        ? () => this.permissionAware("audio", this.audioGraphProvider)
         : undefined,
-      devices: desktopPermissionGranted(this.permissionPolicy, "devices")
-        ? (options.devices ?? (linuxDeviceAwarenessAvailable() ? this.devicesProvider : undefined))
+      devices: linuxDeviceAwarenessAvailable()
+        ? () => this.permissionAware("devices", this.devicesProvider)
         : undefined,
-      network: desktopPermissionGranted(this.permissionPolicy, "network")
-        ? (options.networkSnapshot ?? (linuxNetworkAwarenessAvailable() ? this.networkSnapshotProvider : undefined))
+      network: linuxNetworkAwarenessAvailable()
+        ? () => this.permissionAware("network", this.networkSnapshotProvider)
         : undefined,
-      notifications: desktopPermissionGranted(this.permissionPolicy, "notifications")
-        ? (options.notifications ?? (linuxNotificationAwarenessAvailable() ? this.notificationsProvider : undefined))
+      notifications: linuxNotificationAwarenessAvailable()
+        ? () => this.permissionAware("notifications", this.notificationsProvider)
         : undefined,
-      virtualDesktops: desktopPermissionGranted(this.permissionPolicy, "virtual-desktops")
-        ? (options.virtualDesktops ?? (kdeVirtualDesktopAwarenessAvailable() ? this.virtualDesktopsProvider : undefined))
+      virtualDesktops: kdeVirtualDesktopAwarenessAvailable()
+        ? () => this.permissionAware("virtual-desktops", this.virtualDesktopsProvider)
         : undefined,
       now: options.now,
     });
@@ -216,6 +214,26 @@ export class DesktopAgentDaemon {
       if (error instanceof DesktopAgentAlreadyRunningError) throw error;
       throw error;
     }
+  }
+
+  private permissionAware<T>(id: DesktopPermissionId, provider: () => Promise<T>): Promise<T> {
+    if (!desktopPermissionGranted(this.permissionPolicy, id)) {
+      return Promise.reject(new Error(`Desktop permission ${id} is disabled.`));
+    }
+    return provider();
+  }
+
+  updatePermissions(permissions: DesktopPermissionPolicy): void {
+    this.permissionPolicy = { ...permissions };
+    if (!this.startedAt || this.stopping) return;
+
+    const notificationsReady = this.capabilitiesProvider().find((capability) => capability.id === "notifications")?.state === "ready";
+    if (notificationsReady) this.notificationMonitor?.start();
+    else this.notificationMonitor?.stop();
+
+    const eventsReady = this.capabilitiesProvider().find((capability) => capability.id === "events")?.state === "ready";
+    if (eventsReady) this.activityMonitor.start();
+    else this.activityMonitor.stop();
   }
 
   status(): DesktopAgentStatus {

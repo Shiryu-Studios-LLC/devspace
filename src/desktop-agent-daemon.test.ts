@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { DesktopActivityMonitor } from "./desktop-activity-monitor.js";
-import { DesktopAgentClient } from "./desktop-agent-client.js";
+import { DesktopAgentClient, DesktopAgentClientError } from "./desktop-agent-client.js";
 import { DesktopAgentDaemon } from "./desktop-agent-daemon.js";
 import { defaultDesktopPermissionPolicy } from "./desktop-permissions.js";
 import {
@@ -64,6 +64,46 @@ test("desktop agent serves authenticated status and capability requests", async 
   }));
   assert.equal(unauthorized.ok, false);
   if (!unauthorized.ok) assert.equal(unauthorized.error.code, "DESKTOP_AGENT_UNAUTHORIZED");
+});
+
+test("desktop agent hot-applies permission changes without restarting", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-hot-permissions-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  let processCalls = 0;
+  const permissions = defaultDesktopPermissionPolicy();
+  permissions.processes = false;
+  const daemon = new DesktopAgentDaemon({
+    stateDir,
+    permissions,
+    processes: async () => {
+      processCalls += 1;
+      return [];
+    },
+  });
+  t.after(() => daemon.close());
+  const started = await daemon.start();
+  const client = new DesktopAgentClient({
+    stateDir,
+    spawnDaemon: () => assert.fail("existing daemon should not be respawned"),
+  });
+
+  await assert.rejects(() => client.processes(), (error: unknown) => (
+    error instanceof DesktopAgentClientError && error.code === "DESKTOP_PERMISSION_DENIED"
+  ));
+  assert.equal(processCalls, 0);
+
+  daemon.updatePermissions(defaultDesktopPermissionPolicy());
+  assert.deepEqual(await client.processes(), []);
+  assert.equal(processCalls, 1);
+  assert.equal((await client.status())?.pid, started.pid);
+
+  const deniedAgain = defaultDesktopPermissionPolicy();
+  deniedAgain.processes = false;
+  daemon.updatePermissions(deniedAgain);
+  await assert.rejects(() => client.processes(), (error: unknown) => (
+    error instanceof DesktopAgentClientError && error.code === "DESKTOP_PERMISSION_DENIED"
+  ));
+  assert.equal((await client.status())?.pid, started.pid);
 });
 
 test("desktop agent enforces denied permissions before providers run", async (t) => {
