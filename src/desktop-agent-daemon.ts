@@ -106,6 +106,7 @@ export class DesktopAgentDaemon {
       processes: options.processes ?? (() => listLinuxProcesses([])),
       audio: options.audioGraph ?? (pipeWireAudioAwarenessAvailable() ? this.audioGraphProvider : undefined),
       devices: options.devices ?? (linuxDeviceAwarenessAvailable() ? this.devicesProvider : undefined),
+      network: options.networkSnapshot ?? (linuxNetworkAwarenessAvailable() ? this.networkSnapshotProvider : undefined),
       now: options.now,
     });
     this.now = options.now ?? Date.now;
@@ -388,7 +389,7 @@ export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
   const audioReady = pipeWireAudioAwarenessAvailable();
   const devicesReady = linuxDeviceAwarenessAvailable();
   const networkReady = linuxNetworkAwarenessAvailable();
-  const eventsReady = windowsReady || displaysReady || processesReady || audioReady || devicesReady;
+  const eventsReady = windowsReady || displaysReady || processesReady || audioReady || devicesReady || networkReady;
   return [
     windowsReady
       ? { id: "windows", state: "ready", detail: "KDE/KWin D-Bus window inventory" }
@@ -414,7 +415,7 @@ export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
       ? { id: "network", state: "ready", detail: "Read-only Linux interfaces, routes, DNS servers, listening sockets, and Cloudflare Tunnel process state" }
       : { id: "network", state: "unavailable", detail: "Linux iproute2 network inventory is unavailable" },
     eventsReady
-      ? { id: "events", state: "ready", detail: "Bounded in-memory process/window/display/audio/device activity timeline" }
+      ? { id: "events", state: "ready", detail: "Bounded in-memory process/window/display/audio/device/network activity timeline" }
       : { id: "events", state: "unavailable", detail: "No activity sources are available" },
   ];
 }

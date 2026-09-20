@@ -5,6 +5,7 @@ import type {
   DesktopAudioNode,
   DesktopDeviceInfo,
   DesktopDisplayInfo,
+  DesktopNetworkSnapshot,
   DesktopProcessInfo,
   DesktopWindowInfo,
 } from "./desktop-agent-protocol.js";
@@ -15,6 +16,7 @@ export interface DesktopActivityMonitorOptions {
   processes: () => Promise<DesktopProcessInfo[]>;
   audio?: () => Promise<DesktopAudioGraph>;
   devices?: () => Promise<DesktopDeviceInfo[]>;
+  network?: () => Promise<DesktopNetworkSnapshot>;
   pollIntervalMs?: number;
   maxEvents?: number;
   now?: () => number;
@@ -29,6 +31,7 @@ export class DesktopActivityMonitor {
   private readonly processesProvider: () => Promise<DesktopProcessInfo[]>;
   private readonly audioProvider?: () => Promise<DesktopAudioGraph>;
   private readonly devicesProvider?: () => Promise<DesktopDeviceInfo[]>;
+  private readonly networkProvider?: () => Promise<DesktopNetworkSnapshot>;
   private readonly pollIntervalMs: number;
   private readonly maxEvents: number;
   private readonly now: () => number;
@@ -40,6 +43,7 @@ export class DesktopActivityMonitor {
   private audioStreams = new Map<number, DesktopAudioNode>();
   private audioLinks = new Map<number, DesktopAudioLink>();
   private devices = new Map<string, DesktopDeviceInfo>();
+  private network?: DesktopNetworkSnapshot;
   private initialized = false;
   private polling = false;
   private sequence = 0;
@@ -51,6 +55,7 @@ export class DesktopActivityMonitor {
     this.processesProvider = options.processes;
     this.audioProvider = options.audio;
     this.devicesProvider = options.devices;
+    this.networkProvider = options.network;
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
     this.maxEvents = options.maxEvents ?? DEFAULT_MAX_EVENTS;
     this.now = options.now ?? Date.now;
@@ -94,11 +99,12 @@ export class DesktopActivityMonitor {
       // such as busctl, kscreen-doctor, or pw-dump. Finish those observations
       // before sampling /proc so the activity monitor does not report its own
       // probes as user process start/stop events.
-      const [windowsResult, displaysResult, audioResult, devicesResult] = await Promise.allSettled([
+      const [windowsResult, displaysResult, audioResult, devicesResult, networkResult] = await Promise.allSettled([
         this.windowsProvider(),
         this.displaysProvider(),
         this.audioProvider ? this.audioProvider() : Promise.resolve(undefined),
         this.devicesProvider ? this.devicesProvider() : Promise.resolve(undefined),
+        this.networkProvider ? this.networkProvider() : Promise.resolve(undefined),
       ]);
       const processesResult = await Promise.resolve(this.processesProvider()).then(
         (value) => ({ status: "fulfilled" as const, value }),
@@ -128,6 +134,7 @@ export class DesktopActivityMonitor {
       const nextDevices = deviceList
         ? new Map(deviceList.map((device) => [device.id, device]))
         : this.devices;
+      const nextNetwork = networkResult.status === "fulfilled" ? networkResult.value : undefined;
 
       if (!this.initialized) {
         this.windows = nextWindows;
@@ -137,6 +144,7 @@ export class DesktopActivityMonitor {
         this.audioStreams = nextAudioStreams;
         this.audioLinks = nextAudioLinks;
         this.devices = nextDevices;
+        this.network = nextNetwork;
         this.initialized = true;
         return;
       }
@@ -149,6 +157,7 @@ export class DesktopActivityMonitor {
         this.diffAudioLinks(this.audioLinks, nextAudioLinks, this.audioNodes, nextAudioNodes);
       }
       if (deviceList) this.diffDevices(this.devices, nextDevices);
+      if (nextNetwork && this.network) this.diffNetwork(this.network, nextNetwork);
 
       this.windows = nextWindows;
       this.displays = nextDisplays;
@@ -157,6 +166,7 @@ export class DesktopActivityMonitor {
       this.audioStreams = nextAudioStreams;
       this.audioLinks = nextAudioLinks;
       this.devices = nextDevices;
+      this.network = nextNetwork ?? this.network;
     } finally {
       this.polling = false;
     }
@@ -400,6 +410,84 @@ export class DesktopActivityMonitor {
     }
   }
 
+  private diffNetwork(previous: DesktopNetworkSnapshot, next: DesktopNetworkSnapshot): void {
+    const previousInterfaces = new Map(previous.interfaces.map((item) => [item.name, item]));
+    const nextInterfaces = new Map(next.interfaces.map((item) => [item.name, item]));
+    const interfaceNames = new Set([...previousInterfaces.keys(), ...nextInterfaces.keys()]);
+    for (const name of interfaceNames) {
+      const old = previousInterfaces.get(name);
+      const current = nextInterfaces.get(name);
+      if (old && current && networkInterfaceFingerprint(old) === networkInterfaceFingerprint(current)) continue;
+      this.push({
+        type: "network.interface.changed",
+        sourceModule: "network",
+        entityId: name,
+        correlationId: `network-interface:${name}`,
+        applicationId: name,
+        summary: `Network interface changed: ${name}.`,
+      });
+    }
+
+    if (networkSetFingerprint(previous.routes.map(routeFingerprint)) !== networkSetFingerprint(next.routes.map(routeFingerprint))) {
+      this.push({
+        type: "network.route.changed",
+        sourceModule: "network",
+        entityId: "routes",
+        correlationId: "network:routes",
+        summary: "Network routes changed.",
+      });
+    }
+    if (networkSetFingerprint(previous.dnsServers.map((server) => `${server.interfaceName ?? "global"}|${server.address}`)) !== networkSetFingerprint(next.dnsServers.map((server) => `${server.interfaceName ?? "global"}|${server.address}`))) {
+      this.push({
+        type: "network.dns.changed",
+        sourceModule: "network",
+        entityId: "dns",
+        correlationId: "network:dns",
+        summary: "DNS server configuration changed.",
+      });
+    }
+
+    const previousListeners = new Map(previous.listeners.map((listener) => [listenerFingerprint(listener), listener]));
+    const nextListeners = new Map(next.listeners.map((listener) => [listenerFingerprint(listener), listener]));
+    for (const [id, listener] of nextListeners) {
+      if (previousListeners.has(id)) continue;
+      this.push({
+        type: "network.listener.opened",
+        sourceModule: "network",
+        entityId: id,
+        correlationId: listener.pid !== undefined ? `pid:${listener.pid}` : `network-listener:${id}`,
+        applicationId: listener.processName,
+        pid: listener.pid,
+        summary: `Network listener opened: ${listener.protocol.toUpperCase()} ${listener.address}:${listener.port}${listener.processName ? ` (${listener.processName})` : ""}.`,
+      });
+    }
+    for (const [id, listener] of previousListeners) {
+      if (nextListeners.has(id)) continue;
+      this.push({
+        type: "network.listener.closed",
+        sourceModule: "network",
+        entityId: id,
+        correlationId: listener.pid !== undefined ? `pid:${listener.pid}` : `network-listener:${id}`,
+        applicationId: listener.processName,
+        pid: listener.pid,
+        summary: `Network listener closed: ${listener.protocol.toUpperCase()} ${listener.address}:${listener.port}${listener.processName ? ` (${listener.processName})` : ""}.`,
+      });
+    }
+
+    if (previous.cloudflareTunnel.running !== next.cloudflareTunnel.running) {
+      const running = next.cloudflareTunnel.running;
+      this.push({
+        type: running ? "network.tunnel.started" : "network.tunnel.stopped",
+        sourceModule: "network",
+        entityId: "cloudflare-tunnel",
+        correlationId: "network:cloudflare-tunnel",
+        applicationId: "cloudflared",
+        pid: next.cloudflareTunnel.pids[0] ?? previous.cloudflareTunnel.pids[0],
+        summary: `Cloudflare Tunnel ${running ? "started" : "stopped"}.`,
+      });
+    }
+  }
+
   private push(event: Omit<DesktopActivityEvent, "sequence" | "timestamp">): void {
     this.sequence += 1;
     this.events.push({
@@ -489,6 +577,52 @@ function changedDeviceFields(previous: DesktopDeviceInfo, next: DesktopDeviceInf
   if (previous.mountpoints.join("\0") !== next.mountpoints.join("\0")) changed.push("mountpoints");
   if (previous.name !== next.name || previous.vendor !== next.vendor || previous.model !== next.model) changed.push("identity metadata");
   return changed;
+}
+
+function networkInterfaceFingerprint(networkInterface: DesktopNetworkSnapshot["interfaces"][number]): string {
+  return JSON.stringify({
+    kind: networkInterface.kind,
+    linkType: networkInterface.linkType,
+    operState: networkInterface.operState,
+    mtu: networkInterface.mtu,
+    up: networkInterface.up,
+    lowerUp: networkInterface.lowerUp,
+    loopback: networkInterface.loopback,
+    addresses: networkInterface.addresses
+      .map((address) => `${address.family}|${address.address}|${address.prefixLength}|${address.scope ?? ""}|${address.dynamic ?? false}`)
+      .sort(),
+  });
+}
+
+function routeFingerprint(route: DesktopNetworkSnapshot["routes"][number]): string {
+  return [
+    route.family,
+    route.destination,
+    route.gateway ?? "",
+    route.interfaceName ?? "",
+    route.table ?? "",
+    route.protocol ?? "",
+    route.scope ?? "",
+    route.preferredSource ?? "",
+    route.metric ?? "",
+    route.type ?? "",
+    route.linkDown ? "down" : "up",
+  ].join("|");
+}
+
+function listenerFingerprint(listener: DesktopNetworkSnapshot["listeners"][number]): string {
+  return [
+    listener.protocol,
+    listener.address,
+    listener.port,
+    listener.interfaceName ?? "",
+    listener.processName ?? "",
+    listener.pid ?? "",
+  ].join("|");
+}
+
+function networkSetFingerprint(values: string[]): string {
+  return values.slice().sort().join("\n");
 }
 
 function deviceEvent(

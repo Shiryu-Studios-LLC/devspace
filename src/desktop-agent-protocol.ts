@@ -120,13 +120,20 @@ export type DesktopActivityEventType =
   | "audio.route.changed"
   | "device.connected"
   | "device.disconnected"
-  | "device.changed";
+  | "device.changed"
+  | "network.interface.changed"
+  | "network.route.changed"
+  | "network.dns.changed"
+  | "network.listener.opened"
+  | "network.listener.closed"
+  | "network.tunnel.started"
+  | "network.tunnel.stopped";
 
 export interface DesktopActivityEvent {
   sequence: number;
   timestamp: string;
   type: DesktopActivityEventType;
-  sourceModule: "processes" | "windows" | "displays" | "audio" | "devices";
+  sourceModule: "processes" | "windows" | "displays" | "audio" | "devices" | "network";
   entityId: string;
   correlationId: string;
   applicationId?: string;
@@ -577,7 +584,7 @@ function decodeDesktopActivityEvent(value: unknown): DesktopActivityEvent {
     throw new DesktopAgentProtocolError("INVALID_EVENTS", `Invalid desktop activity event type: ${type}`);
   }
   const sourceModule = requiredString(record.sourceModule, "event.sourceModule");
-  if (sourceModule !== "processes" && sourceModule !== "windows" && sourceModule !== "displays" && sourceModule !== "audio" && sourceModule !== "devices") {
+  if (sourceModule !== "processes" && sourceModule !== "windows" && sourceModule !== "displays" && sourceModule !== "audio" && sourceModule !== "devices" && sourceModule !== "network") {
     throw new DesktopAgentProtocolError("INVALID_EVENTS", `Invalid desktop activity source: ${sourceModule}`);
   }
   return {
@@ -814,7 +821,14 @@ function isDesktopActivityEventType(value: string): value is DesktopActivityEven
     || value === "audio.route.changed"
     || value === "device.connected"
     || value === "device.disconnected"
-    || value === "device.changed";
+    || value === "device.changed"
+    || value === "network.interface.changed"
+    || value === "network.route.changed"
+    || value === "network.dns.changed"
+    || value === "network.listener.opened"
+    || value === "network.listener.closed"
+    || value === "network.tunnel.started"
+    || value === "network.tunnel.stopped";
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

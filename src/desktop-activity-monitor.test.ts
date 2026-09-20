@@ -5,6 +5,7 @@ import type {
   DesktopAudioGraph,
   DesktopDeviceInfo,
   DesktopDisplayInfo,
+  DesktopNetworkSnapshot,
   DesktopProcessInfo,
   DesktopWindowInfo,
 } from "./desktop-agent-protocol.js";
@@ -95,6 +96,46 @@ test("desktop activity monitor records PipeWire stream and route changes", async
     "audio.stream.stopped",
     "audio.route.removed",
   ]);
+});
+
+test("desktop activity monitor records network interface, route, DNS, listener, and tunnel changes", async () => {
+  let network = networkSnapshot({
+    listenerPort: 7676,
+    dns: "1.1.1.1",
+    routeGateway: "192.168.1.254",
+    tunnelRunning: true,
+    interfaceUp: true,
+  });
+  const monitor = new DesktopActivityMonitor({
+    windows: async () => [],
+    processes: async () => [],
+    displays: async () => [],
+    network: async () => network,
+  });
+
+  await monitor.sample();
+  assert.equal(monitor.cursor(), 0, "initial network snapshot should establish a silent baseline");
+
+  network = networkSnapshot({
+    listenerPort: 7677,
+    dns: "1.0.0.1",
+    routeGateway: "192.168.1.1",
+    tunnelRunning: false,
+    interfaceUp: false,
+  });
+  await monitor.sample();
+
+  assert.deepEqual(monitor.recent().map((event) => event.type), [
+    "network.interface.changed",
+    "network.route.changed",
+    "network.dns.changed",
+    "network.listener.opened",
+    "network.listener.closed",
+    "network.tunnel.stopped",
+  ]);
+  assert.equal(monitor.recent()[0]?.sourceModule, "network");
+  assert.equal(monitor.recent()[3]?.correlationId, "pid:999");
+  assert.equal(monitor.recent()[5]?.correlationId, "network:cloudflare-tunnel");
 });
 
 test("desktop activity monitor records device connection, disconnection, and metadata changes", async () => {
@@ -278,6 +319,43 @@ function audioLink(
     inputNodeName,
     outputPortName: "out_FL",
     inputPortName: "in_FL",
+  };
+}
+
+function networkSnapshot(options: {
+  listenerPort: number;
+  dns: string;
+  routeGateway: string;
+  tunnelRunning: boolean;
+  interfaceUp: boolean;
+}): DesktopNetworkSnapshot {
+  return {
+    generatedAt: "2026-09-20T03:00:00.000Z",
+    interfaces: [{
+      index: 2,
+      name: "enp6s0",
+      kind: "ethernet",
+      linkType: "ether",
+      operState: options.interfaceUp ? "UP" : "DOWN",
+      mtu: 1500,
+      up: options.interfaceUp,
+      lowerUp: options.interfaceUp,
+      loopback: false,
+      addresses: options.interfaceUp
+        ? [{ family: "ipv4", address: "192.168.1.208", prefixLength: 24, scope: "global", dynamic: true }]
+        : [],
+    }],
+    routes: [{
+      family: "ipv4",
+      destination: "default",
+      gateway: options.routeGateway,
+      interfaceName: "enp6s0",
+      protocol: "dhcp",
+      linkDown: !options.interfaceUp,
+    }],
+    dnsServers: [{ interfaceName: "enp6s0", address: options.dns }],
+    listeners: [{ protocol: "tcp", address: "127.0.0.1", port: options.listenerPort, processName: "node", pid: 999 }],
+    cloudflareTunnel: { running: options.tunnelRunning, pids: options.tunnelRunning ? [1877] : [] },
   };
 }
 

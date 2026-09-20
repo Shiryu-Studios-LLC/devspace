@@ -79,7 +79,7 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [x] Add device connect/disconnect/change events with privacy-safe stable IDs.
 - [ ] Add notification events.
 - [ ] Add authorized filesystem events.
-- [ ] Add network events. Display connect/disconnect/layout/mode/brightness changes are already captured.
+- [x] Add network events for interface state/address changes, route/DNS changes, listener open/close, and Cloudflare Tunnel start/stop. Display connect/disconnect/layout/mode/brightness changes are already captured.
 - [x] Build a bounded in-memory activity timeline that can answer questions such as “what happened after I clicked Generate?” by comparing event sequence cursors.
 
 ## Integration modules
