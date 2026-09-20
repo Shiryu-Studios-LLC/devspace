@@ -233,6 +233,60 @@ test("desktop agent serves structured screen captures through the screen permiss
   assert.equal(capture.mimeType, "image/png");
 });
 
+test("desktop agent serves clipboard text and enforces read/write permissions independently", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-clipboard-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const permissions = defaultDesktopPermissionPolicy();
+  permissions["clipboard-write"] = false;
+  let readCalls = 0;
+  let writeCalls = 0;
+  const daemon = new DesktopAgentDaemon({
+    stateDir,
+    permissions,
+    capabilities: () => [
+      { id: "clipboard-read", state: "ready" },
+      { id: "clipboard-write", state: "ready" },
+    ],
+    clipboardRead: async () => {
+      readCalls += 1;
+      return {
+        available: true,
+        text: "seed clipboard",
+        mimeType: "text/plain;charset=utf-8",
+        bytes: 14,
+        readAt: "2026-09-20T12:00:00.000Z",
+      };
+    },
+    clipboardWrite: async (text) => {
+      writeCalls += 1;
+      return {
+        bytes: Buffer.byteLength(text, "utf8"),
+        mimeType: "text/plain;charset=utf-8",
+        writtenAt: "2026-09-20T12:00:01.000Z",
+      };
+    },
+  });
+  t.after(() => daemon.close());
+  await daemon.start();
+  const client = new DesktopAgentClient({
+    stateDir,
+    spawnDaemon: () => assert.fail("existing daemon should not be respawned"),
+  });
+
+  const read = await client.readClipboard();
+  assert.equal(read.text, "seed clipboard");
+  assert.equal(readCalls, 1);
+  await assert.rejects(() => client.writeClipboard("blocked"), (error: unknown) => (
+    error instanceof DesktopAgentClientError && error.code === "DESKTOP_PERMISSION_DENIED"
+  ));
+  assert.equal(writeCalls, 0, "denied clipboard writes must not reach the provider");
+
+  daemon.updatePermissions(defaultDesktopPermissionPolicy());
+  const written = await client.writeClipboard("allowed");
+  assert.equal(written.bytes, 7);
+  assert.equal(writeCalls, 1);
+});
+
 test("desktop agent enforces denied permissions before providers run", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-permissions-"));
   t.after(() => rm(stateDir, { recursive: true, force: true }));

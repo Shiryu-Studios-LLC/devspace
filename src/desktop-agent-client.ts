@@ -26,6 +26,8 @@ import {
   decodeDesktopTraceCorrelation,
   decodeDesktopProcessList,
   decodeDesktopScreenCapture,
+  decodeDesktopClipboardReadResult,
+  decodeDesktopClipboardWriteResult,
   decodeDesktopWindowList,
   encodeDesktopAgentRequest,
   type DesktopActivityTimeline,
@@ -47,6 +49,8 @@ import {
   type DesktopProcessInfo,
   type DesktopScreenCapture,
   type DesktopScreenCaptureRequest,
+  type DesktopClipboardReadResult,
+  type DesktopClipboardWriteResult,
   type DesktopWindowInfo,
 } from "./desktop-agent-protocol.js";
 
@@ -131,6 +135,14 @@ export class DesktopAgentClient {
 
   async captureScreen(request: DesktopScreenCaptureRequest): Promise<DesktopScreenCapture> {
     return decodeDesktopScreenCapture(await this.requestReady("screen.capture", { ...request }));
+  }
+
+  async readClipboard(): Promise<DesktopClipboardReadResult> {
+    return decodeDesktopClipboardReadResult(await this.requestReady("clipboard.read"));
+  }
+
+  async writeClipboard(text: string): Promise<DesktopClipboardWriteResult> {
+    return decodeDesktopClipboardWriteResult(await this.requestReady("clipboard.write", { text }));
   }
 
   async recentActivity(): Promise<DesktopActivityTimeline> {

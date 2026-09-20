@@ -24,6 +24,8 @@ import type {
   DesktopTraceCorrelation,
   DesktopProcessInfo,
   DesktopScreenCapture,
+  DesktopClipboardReadResult,
+  DesktopClipboardWriteResult,
   DesktopWindowInfo,
 } from "../desktop-agent-protocol.js";
 
@@ -381,6 +383,83 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
         return clientErrorResponse(error);
       } finally {
         if (capturePath) await rm(capturePath, { force: true }).catch(() => undefined);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "desktop_clipboard_read",
+    {
+      title: "Read Desktop Clipboard",
+      description:
+        "Read the current Wayland text clipboard through the isolated Desktop Agent. Only text MIME types are returned and payloads are bounded to 1 MiB.",
+      inputSchema: {},
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        clipboard: z.object({
+          available: z.boolean(),
+          text: z.string().optional(),
+          mimeType: z.string().optional(),
+          bytes: z.number().int().nonnegative().optional(),
+          readAt: z.string(),
+        }).optional(),
+      },
+      _meta: {},
+      annotations: readAnnotations,
+    },
+    async () => {
+      try {
+        const clipboard = await client.readClipboard();
+        const result = formatClipboardReadSummary(clipboard);
+        return {
+          content: [{ type: "text" as const, text: clipboard.available ? `${result}\n\n${clipboard.text ?? ""}` : result }],
+          structuredContent: { status: "ready" as const, result, clipboard },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "desktop_clipboard_write",
+    {
+      title: "Write Desktop Clipboard",
+      description:
+        "Replace the current Wayland clipboard with UTF-8 text through the isolated Desktop Agent. Payloads are bounded to 1 MiB.",
+      inputSchema: {
+        text: z.string().max(1024 * 1024),
+      },
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        clipboard: z.object({
+          bytes: z.number().int().nonnegative(),
+          mimeType: z.string(),
+          writtenAt: z.string(),
+        }).optional(),
+      },
+      _meta: {},
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ text }) => {
+      try {
+        const clipboard = await client.writeClipboard(text);
+        const result = formatClipboardWriteSummary(clipboard);
+        return {
+          content: [{ type: "text" as const, text: result }],
+          structuredContent: { status: "ready" as const, result, clipboard },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
       }
     },
   );
@@ -986,6 +1065,15 @@ function describeStatus(status: DesktopAgentStatus): string {
     `session ${status.sessionType}`,
     `protocol ${status.protocolVersion}`,
   ].join("; ");
+}
+
+function formatClipboardReadSummary(clipboard: DesktopClipboardReadResult): string {
+  if (!clipboard.available) return "Wayland clipboard does not currently contain a supported text format.";
+  return `Read ${clipboard.bytes ?? 0} clipboard byte(s) as ${clipboard.mimeType ?? "text"}.`;
+}
+
+function formatClipboardWriteSummary(clipboard: DesktopClipboardWriteResult): string {
+  return `Wrote ${clipboard.bytes} clipboard byte(s) as ${clipboard.mimeType}.`;
 }
 
 function formatNotificationSummary(notifications: DesktopNotificationInfo[]): string {

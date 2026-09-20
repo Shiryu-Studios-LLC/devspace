@@ -20,6 +20,8 @@ import {
   decodeDesktopTraceCorrelation,
   decodeDesktopProcessList,
   decodeDesktopScreenCapture,
+  decodeDesktopClipboardReadResult,
+  decodeDesktopClipboardWriteResult,
   decodeDesktopWindowList,
   encodeDesktopAgentRequest,
   type DesktopAgentRequest,
@@ -111,6 +113,34 @@ test("desktop agent accepts validated screen capture requests", () => {
   assert.throws(
     () => decodeDesktopAgentRequest({ ...request, params: { target: "area", x: 0, y: 0, width: 0, height: 10 } }),
     /positive width\/height/,
+  );
+});
+
+test("desktop agent accepts clipboard read and write requests", () => {
+  const readRequest: DesktopAgentRequest = {
+    requestId: "request-clipboard-read",
+    protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
+    authToken: "a".repeat(64),
+    method: "clipboard.read",
+    params: {},
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(readRequest))), readRequest);
+
+  const writeRequest: DesktopAgentRequest = {
+    requestId: "request-clipboard-write",
+    protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
+    authToken: "a".repeat(64),
+    method: "clipboard.write",
+    params: { text: "hello clipboard" },
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(writeRequest))), writeRequest);
+  assert.throws(
+    () => decodeDesktopAgentRequest({ ...writeRequest, params: { text: 123 } }),
+    /requires text/,
+  );
+  assert.throws(
+    () => decodeDesktopAgentRequest({ ...writeRequest, params: { text: "hello", path: "/tmp/x" } }),
+    /unknown parameters/,
   );
 });
 
@@ -239,6 +269,32 @@ test("desktop agent decodes a structured screen capture", () => {
   assert.equal(capture.target, "window");
   assert.equal(capture.width, 1200);
   assert.equal(capture.windowId, "{11111111-2222-3333-4444-555555555555}");
+});
+
+test("desktop agent decodes structured clipboard results", () => {
+  const read = decodeDesktopClipboardReadResult({
+    available: true,
+    text: "hello clipboard",
+    mimeType: "text/plain;charset=utf-8",
+    bytes: 15,
+    readAt: "2026-09-20T12:00:00.000Z",
+  });
+  assert.equal(read.text, "hello clipboard");
+  assert.equal(read.bytes, 15);
+
+  const empty = decodeDesktopClipboardReadResult({
+    available: false,
+    readAt: "2026-09-20T12:00:01.000Z",
+  });
+  assert.equal(empty.available, false);
+
+  const write = decodeDesktopClipboardWriteResult({
+    bytes: 15,
+    mimeType: "text/plain;charset=utf-8",
+    writtenAt: "2026-09-20T12:00:02.000Z",
+  });
+  assert.equal(write.bytes, 15);
+  assert.equal(write.mimeType, "text/plain;charset=utf-8");
 });
 
 test("desktop agent decodes a structured window list", () => {

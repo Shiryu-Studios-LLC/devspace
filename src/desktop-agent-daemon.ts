@@ -69,6 +69,8 @@ import {
   type DesktopProcessInfo,
   type DesktopScreenCapture,
   type DesktopScreenCaptureRequest,
+  type DesktopClipboardReadResult,
+  type DesktopClipboardWriteResult,
   type DesktopWindowInfo,
 } from "./desktop-agent-protocol.js";
 import {
@@ -87,6 +89,12 @@ import {
   createKdeScreenCaptureProvider,
   kdeScreenCaptureAvailable,
 } from "./desktop-screenshot-kde.js";
+import {
+  readWaylandClipboardText,
+  waylandClipboardReadAvailable,
+  waylandClipboardWriteAvailable,
+  writeWaylandClipboardText,
+} from "./desktop-clipboard-wayland.js";
 
 const MAX_REQUEST_BYTES = 128 * 1024;
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -100,6 +108,8 @@ export interface DesktopAgentDaemonOptions {
   displays?: () => Promise<DesktopDisplayInfo[]>;
   processes?: () => Promise<DesktopProcessInfo[]>;
   screenCapture?: (request: DesktopScreenCaptureRequest) => Promise<DesktopScreenCapture>;
+  clipboardRead?: () => Promise<DesktopClipboardReadResult>;
+  clipboardWrite?: (text: string) => Promise<DesktopClipboardWriteResult>;
   audioGraph?: () => Promise<DesktopAudioGraph>;
   devices?: () => Promise<DesktopDeviceInfo[]>;
   networkSnapshot?: () => Promise<DesktopNetworkSnapshot>;
@@ -123,6 +133,8 @@ export class DesktopAgentDaemon {
   private readonly displaysProvider: () => Promise<DesktopDisplayInfo[]>;
   private readonly processesProvider: () => Promise<DesktopProcessInfo[]>;
   private readonly screenCaptureProvider: (request: DesktopScreenCaptureRequest) => Promise<DesktopScreenCapture>;
+  private readonly clipboardReadProvider: () => Promise<DesktopClipboardReadResult>;
+  private readonly clipboardWriteProvider: (text: string) => Promise<DesktopClipboardWriteResult>;
   private readonly audioGraphProvider: () => Promise<DesktopAudioGraph>;
   private readonly devicesProvider: () => Promise<DesktopDeviceInfo[]>;
   private readonly networkSnapshotProvider: () => Promise<DesktopNetworkSnapshot>;
@@ -152,6 +164,8 @@ export class DesktopAgentDaemon {
     this.displaysProvider = options.displays ?? listKdeDisplays;
     this.processesProvider = options.processes ?? (() => defaultProcessInventory(desktopPermissionGranted(this.permissionPolicy, "windows")));
     this.screenCaptureProvider = options.screenCapture ?? createKdeScreenCaptureProvider(this.paths.stateDir, { now: options.now });
+    this.clipboardReadProvider = options.clipboardRead ?? readWaylandClipboardText;
+    this.clipboardWriteProvider = options.clipboardWrite ?? writeWaylandClipboardText;
     this.audioGraphProvider = options.audioGraph ?? getPipeWireAudioGraph;
     this.devicesProvider = options.devices ?? listLinuxDevices;
     this.networkSnapshotProvider = options.networkSnapshot ?? getLinuxNetworkSnapshot;
@@ -422,6 +436,26 @@ export class DesktopAgentDaemon {
         }
         return this.screenCaptureProvider(request.params);
       }
+      case "clipboard.read": {
+        const clipboardCapability = this.capabilitiesProvider().find((capability) => capability.id === "clipboard-read");
+        if (clipboardCapability?.state !== "ready") {
+          throw new DesktopAgentProtocolError(
+            "DESKTOP_CLIPBOARD_UNAVAILABLE",
+            clipboardCapability?.detail ?? "Clipboard reading is unavailable.",
+          );
+        }
+        return this.clipboardReadProvider();
+      }
+      case "clipboard.write": {
+        const clipboardCapability = this.capabilitiesProvider().find((capability) => capability.id === "clipboard-write");
+        if (clipboardCapability?.state !== "ready") {
+          throw new DesktopAgentProtocolError(
+            "DESKTOP_CLIPBOARD_UNAVAILABLE",
+            clipboardCapability?.detail ?? "Clipboard writing is unavailable.",
+          );
+        }
+        return this.clipboardWriteProvider(request.params.text);
+      }
       case "events.recent": {
         const eventsCapability = this.capabilitiesProvider().find((capability) => capability.id === "events");
         if (eventsCapability?.state !== "ready") {
@@ -572,6 +606,8 @@ export function defaultDesktopCapabilities(
   const displaysReady = kdeDisplayAwarenessAvailable();
   const processesReady = linuxProcessAwarenessAvailable();
   const screenReady = kdeScreenCaptureAvailable();
+  const clipboardReadReady = waylandClipboardReadAvailable();
+  const clipboardWriteReady = waylandClipboardWriteAvailable();
   const audioReady = pipeWireAudioAwarenessAvailable();
   const devicesReady = linuxDeviceAwarenessAvailable();
   const networkReady = linuxNetworkAwarenessAvailable();
@@ -609,9 +645,12 @@ export function defaultDesktopCapabilities(
     desktopPermissionGranted(permissions, "accessibility")
       ? { id: "accessibility", state: "not_implemented" }
       : disabledCapability("accessibility"),
-    (desktopPermissionGranted(permissions, "clipboard-read") || desktopPermissionGranted(permissions, "clipboard-write"))
-      ? { id: "clipboard", state: "not_implemented" }
-      : disabledCapability("clipboard"),
+    permissionAwareCapability(permissions, "clipboard-read", clipboardReadReady,
+      "Wayland text clipboard reads via wl-paste with a 1 MiB payload limit",
+      "Wayland wl-paste clipboard access is unavailable"),
+    permissionAwareCapability(permissions, "clipboard-write", clipboardWriteReady,
+      "Wayland text clipboard writes via wl-copy with a 1 MiB payload limit",
+      "Wayland wl-copy clipboard access is unavailable"),
     permissionAwareCapability(permissions, "notifications", notificationsReady,
       "Read-only bounded in-memory observation of freedesktop notifications delivered through Plasma",
       "Plasma notification D-Bus service is unavailable"),
@@ -647,6 +686,8 @@ function permissionForDesktopMethod(method: DesktopAgentRequest["method"]): Desk
     case "displays.list": return "displays";
     case "processes.list": return "processes";
     case "screen.capture": return "screen";
+    case "clipboard.read": return "clipboard-read";
+    case "clipboard.write": return "clipboard-write";
     case "events.recent": return "events";
     case "audio.graph": return "audio";
     case "devices.list": return "devices";

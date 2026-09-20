@@ -51,6 +51,20 @@ export interface DesktopScreenCapture {
   y?: number;
 }
 
+export interface DesktopClipboardReadResult {
+  available: boolean;
+  text?: string;
+  mimeType?: string;
+  bytes?: number;
+  readAt: string;
+}
+
+export interface DesktopClipboardWriteResult {
+  bytes: number;
+  mimeType: string;
+  writtenAt: string;
+}
+
 export interface DesktopAgentStatus {
   state: "ready" | "stopping";
   protocolVersion: number;
@@ -417,6 +431,8 @@ export type DesktopAgentMethod =
   | "trace.correlate"
   | "notifications.recent"
   | "screen.capture"
+  | "clipboard.read"
+  | "clipboard.write"
   | "desktop.stop";
 
 type DesktopAgentRequestBase = {
@@ -425,7 +441,7 @@ type DesktopAgentRequestBase = {
   authToken: string;
 };
 
-type DesktopAgentNoParamsMethod = Exclude<DesktopAgentMethod, "logs.read" | "trace.correlate" | "screen.capture">;
+type DesktopAgentNoParamsMethod = Exclude<DesktopAgentMethod, "logs.read" | "trace.correlate" | "screen.capture" | "clipboard.write">;
 
 export type DesktopAgentRequest = DesktopAgentRequestBase & (
   | {
@@ -451,6 +467,12 @@ export type DesktopAgentRequest = DesktopAgentRequestBase & (
   | {
       method: "screen.capture";
       params: DesktopScreenCaptureRequest;
+    }
+  | {
+      method: "clipboard.write";
+      params: {
+        text: string;
+      };
     }
 );
 
@@ -530,6 +552,22 @@ export function decodeDesktopAgentRequest(value: unknown): DesktopAgentRequest {
       authToken,
       method,
       params: { correlationId, ...(lines === undefined ? {} : { lines }), ...(query === undefined ? {} : { query }) },
+    };
+  }
+  if (method === "clipboard.write") {
+    const allowed = new Set(["text"]);
+    if (Object.keys(params).some((key) => !allowed.has(key))) {
+      throw new DesktopAgentProtocolError("INVALID_PARAMS", "clipboard.write received unknown parameters.");
+    }
+    if (typeof params.text !== "string") {
+      throw new DesktopAgentProtocolError("INVALID_PARAMS", "clipboard.write requires text.");
+    }
+    return {
+      requestId,
+      protocolVersion,
+      authToken,
+      method,
+      params: { text: params.text },
     };
   }
   if (method === "screen.capture") {
@@ -687,6 +725,45 @@ export function decodeDesktopScreenCapture(value: unknown): DesktopScreenCapture
     windowId: optionalString(record.windowId),
     x: optionalInteger(record.x),
     y: optionalInteger(record.y),
+  };
+}
+
+export function decodeDesktopClipboardReadResult(value: unknown): DesktopClipboardReadResult {
+  const record = asRecord(value);
+  if (!record) {
+    throw new DesktopAgentProtocolError("INVALID_CLIPBOARD", "Desktop agent returned an invalid clipboard read result.");
+  }
+  const available = requiredBoolean(record.available, "clipboard.available");
+  const text = typeof record.text === "string" ? record.text : undefined;
+  const bytes = optionalInteger(record.bytes);
+  if (available && text === undefined) {
+    throw new DesktopAgentProtocolError("INVALID_CLIPBOARD", "Available clipboard text is missing.");
+  }
+  if (bytes !== undefined && bytes < 0) {
+    throw new DesktopAgentProtocolError("INVALID_CLIPBOARD", "Clipboard byte count is invalid.");
+  }
+  return {
+    available,
+    ...(text === undefined ? {} : { text }),
+    ...(record.mimeType === undefined ? {} : { mimeType: requiredString(record.mimeType, "clipboard.mimeType") }),
+    ...(bytes === undefined ? {} : { bytes }),
+    readAt: requiredString(record.readAt, "clipboard.readAt"),
+  };
+}
+
+export function decodeDesktopClipboardWriteResult(value: unknown): DesktopClipboardWriteResult {
+  const record = asRecord(value);
+  if (!record) {
+    throw new DesktopAgentProtocolError("INVALID_CLIPBOARD", "Desktop agent returned an invalid clipboard write result.");
+  }
+  const bytes = requiredInteger(record.bytes, "clipboard.bytes");
+  if (bytes < 0) {
+    throw new DesktopAgentProtocolError("INVALID_CLIPBOARD", "Clipboard byte count is invalid.");
+  }
+  return {
+    bytes,
+    mimeType: requiredString(record.mimeType, "clipboard.mimeType"),
+    writtenAt: requiredString(record.writtenAt, "clipboard.writtenAt"),
   };
 }
 
@@ -1225,6 +1302,8 @@ function isDesktopAgentMethod(value: string): value is DesktopAgentMethod {
     || value === "trace.correlate"
     || value === "notifications.recent"
     || value === "screen.capture"
+    || value === "clipboard.read"
+    || value === "clipboard.write"
     || value === "desktop.stop";
 }
 

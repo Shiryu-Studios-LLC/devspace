@@ -62,7 +62,7 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [x] KDE/Wayland screenshot capture for workspace, named/active screen, named/active window, and rectangular areas via a narrowly authorized KWin ScreenShot2 helper; captures are private temporary PNGs deleted after MCP delivery.
 - [ ] AT-SPI accessibility tree and semantic UI actions.
 - [ ] Keyboard/mouse input control.
-- [ ] Clipboard read/write with explicit permissions.
+- [x] Wayland text clipboard read/write with independent `clipboard-read` / `clipboard-write` permissions and bounded 1 MiB payloads.
 - [x] Read-only bounded in-memory desktop notification awareness via passive freedesktop/Plasma D-Bus observation.
 - [ ] Desktop notification actions/dismissal/reply handling with explicit permissions.
 - [x] Read-only PipeWire audio graph, application streams, channel ports, and active route links.
