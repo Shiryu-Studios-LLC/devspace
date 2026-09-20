@@ -29,9 +29,9 @@ assert.equal(loadConfig(baseEnv).artifactsEnabled, false);
 assert.equal(loadConfig(baseEnv).artifactMaxFileBytes, 100 * 1024 * 1024);
 assert.equal(loadConfig(baseEnv).desktopPermissions.windows, true);
 assert.equal(loadConfig(baseEnv).desktopPermissions.notifications, true);
-assert.equal(loadConfig(baseEnv).desktopPermissions.screen, false);
-assert.equal(loadConfig(baseEnv).desktopPermissions.input, false);
-assert.equal(loadConfig(baseEnv).desktopPermissions["clipboard-read"], false);
+assert.equal(loadConfig(baseEnv).desktopPermissions.screen, true);
+assert.equal(loadConfig(baseEnv).desktopPermissions.input, true);
+assert.equal(loadConfig(baseEnv).desktopPermissions["clipboard-read"], true);
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_ARTIFACTS: "1" }).artifactsEnabled, true);
 assert.equal(
   loadConfig({ ...baseEnv, DEVSPACE_ARTIFACT_MAX_FILE_BYTES: "123" }).artifactMaxFileBytes,

@@ -24,19 +24,8 @@ export type DesktopPermissionId = typeof DESKTOP_PERMISSION_IDS[number];
 export type DesktopPermissionPolicy = Record<DesktopPermissionId, boolean>;
 export type StoredDesktopPermissionPolicy = Partial<Record<DesktopPermissionId, boolean>>;
 
-const DEFAULT_DENIED = new Set<DesktopPermissionId>([
-  "screen",
-  "input",
-  "accessibility",
-  "clipboard-read",
-  "clipboard-write",
-  "notification-actions",
-  "filesystem-watch",
-  "browser",
-]);
-
-export function desktopPermissionDefaultGranted(id: DesktopPermissionId): boolean {
-  return !DEFAULT_DENIED.has(id);
+export function desktopPermissionDefaultGranted(_id: DesktopPermissionId): boolean {
+  return true;
 }
 
 export function defaultDesktopPermissionPolicy(): DesktopPermissionPolicy {

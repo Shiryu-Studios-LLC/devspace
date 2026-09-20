@@ -53,7 +53,7 @@ test("desktop agent serves authenticated status and capability requests", async 
   const permissions = await client.permissions();
   assert.equal(permissions.length, 19);
   assert.equal(permissions.find((permission) => permission.id === "windows")?.granted, true);
-  assert.equal(permissions.find((permission) => permission.id === "screen")?.granted, false);
+  assert.equal(permissions.find((permission) => permission.id === "screen")?.granted, true);
 
   const unauthorized = await sendRaw(started.endpoint, encodeDesktopAgentRequest({
     requestId: "bad-auth",
