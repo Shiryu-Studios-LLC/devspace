@@ -12,6 +12,7 @@ import {
   decodeDesktopDeviceList,
   decodeDesktopDisplayList,
   decodeDesktopNetworkSnapshot,
+  decodeDesktopNotificationList,
   decodeDesktopLogReadResult,
   decodeDesktopLogSources,
   decodeDesktopTraceCorrelation,
@@ -127,6 +128,17 @@ test("desktop agent accepts correlation requests", () => {
     authToken: "a".repeat(64),
     method: "trace.correlate",
     params: { correlationId: "pid:9460", lines: 50, query: "http_request" },
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
+});
+
+test("desktop agent accepts the recent notifications method", () => {
+  const request: DesktopAgentRequest = {
+    requestId: "request-notifications",
+    protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
+    authToken: "a".repeat(64),
+    method: "notifications.recent",
+    params: {},
   };
   assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
 });
@@ -397,6 +409,29 @@ test("desktop agent decodes a structured network snapshot", () => {
   assert.equal(network.interfaces[0]?.name, "enp5s0");
   assert.equal(network.listeners[0]?.port, 7676);
   assert.equal(network.cloudflareTunnel.running, true);
+});
+
+test("desktop agent decodes a structured notification list", () => {
+  const notifications = decodeDesktopNotificationList([{
+    id: "dbus::1.1209:9",
+    notificationId: 15,
+    appName: "DevSpace Test",
+    summary: "Awareness test",
+    body: "Read-only observation.",
+    pid: 9460,
+    desktopEntry: "devspace",
+    category: "device",
+    urgency: 1,
+    actions: [{ id: "default", label: "Open" }],
+    expireTimeoutMs: -1,
+    createdAt: "2026-09-20T06:20:00.000Z",
+    closedAt: "2026-09-20T06:20:01.000Z",
+    closeReason: 2,
+  }]);
+  assert.equal(notifications[0]?.notificationId, 15);
+  assert.equal(notifications[0]?.pid, 9460);
+  assert.equal(notifications[0]?.actions[0]?.label, "Open");
+  assert.equal(notifications[0]?.closeReason, 2);
 });
 
 test("desktop agent decodes log sources and explicit bounded log reads", () => {

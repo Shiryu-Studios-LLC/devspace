@@ -127,13 +127,15 @@ export type DesktopActivityEventType =
   | "network.listener.opened"
   | "network.listener.closed"
   | "network.tunnel.started"
-  | "network.tunnel.stopped";
+  | "network.tunnel.stopped"
+  | "notification.created"
+  | "notification.closed";
 
 export interface DesktopActivityEvent {
   sequence: number;
   timestamp: string;
   type: DesktopActivityEventType;
-  sourceModule: "processes" | "windows" | "displays" | "audio" | "devices" | "network";
+  sourceModule: "processes" | "windows" | "displays" | "audio" | "devices" | "network" | "notifications";
   entityId: string;
   correlationId: string;
   applicationId?: string;
@@ -316,6 +318,24 @@ export interface DesktopTraceCorrelation {
   logs?: DesktopLogReadResult;
 }
 
+export interface DesktopNotificationInfo {
+  id: string;
+  notificationId?: number;
+  replacesId?: number;
+  appName: string;
+  summary: string;
+  body: string;
+  pid?: number;
+  desktopEntry?: string;
+  category?: string;
+  urgency?: number;
+  actions: Array<{ id: string; label: string }>;
+  expireTimeoutMs: number;
+  createdAt: string;
+  closedAt?: string;
+  closeReason?: number;
+}
+
 export type DesktopAgentMethod =
   | "hello"
   | "desktop.status"
@@ -330,6 +350,7 @@ export type DesktopAgentMethod =
   | "logs.sources"
   | "logs.read"
   | "trace.correlate"
+  | "notifications.recent"
   | "desktop.stop";
 
 type DesktopAgentRequestBase = {
@@ -600,6 +621,13 @@ export function decodeDesktopTraceCorrelation(value: unknown): DesktopTraceCorre
   };
 }
 
+export function decodeDesktopNotificationList(value: unknown): DesktopNotificationInfo[] {
+  if (!Array.isArray(value)) {
+    throw new DesktopAgentProtocolError("INVALID_NOTIFICATIONS", "Desktop agent returned an invalid notification list.");
+  }
+  return value.map(decodeDesktopNotificationInfo);
+}
+
 export function desktopAgentProtocolVersion(): number {
   return DESKTOP_AGENT_PROTOCOL_VERSION;
 }
@@ -711,7 +739,7 @@ function decodeDesktopActivityEvent(value: unknown): DesktopActivityEvent {
     throw new DesktopAgentProtocolError("INVALID_EVENTS", `Invalid desktop activity event type: ${type}`);
   }
   const sourceModule = requiredString(record.sourceModule, "event.sourceModule");
-  if (sourceModule !== "processes" && sourceModule !== "windows" && sourceModule !== "displays" && sourceModule !== "audio" && sourceModule !== "devices" && sourceModule !== "network") {
+  if (sourceModule !== "processes" && sourceModule !== "windows" && sourceModule !== "displays" && sourceModule !== "audio" && sourceModule !== "devices" && sourceModule !== "network" && sourceModule !== "notifications") {
     throw new DesktopAgentProtocolError("INVALID_EVENTS", `Invalid desktop activity source: ${sourceModule}`);
   }
   return {
@@ -933,6 +961,39 @@ function decodeDesktopLogEntry(value: unknown): DesktopLogEntry {
   };
 }
 
+function decodeDesktopNotificationInfo(value: unknown): DesktopNotificationInfo {
+  const record = asRecord(value);
+  if (!record) throw new DesktopAgentProtocolError("INVALID_NOTIFICATIONS", "Desktop notification must be an object.");
+  const actions = record.actions;
+  if (!Array.isArray(actions)) {
+    throw new DesktopAgentProtocolError("INVALID_NOTIFICATIONS", "Desktop notification actions must be an array.");
+  }
+  return {
+    id: requiredString(record.id, "notification.id"),
+    notificationId: optionalInteger(record.notificationId),
+    replacesId: optionalInteger(record.replacesId),
+    appName: requiredString(record.appName, "notification.appName"),
+    summary: typeof record.summary === "string" ? record.summary : "",
+    body: typeof record.body === "string" ? record.body : "",
+    pid: optionalInteger(record.pid),
+    desktopEntry: optionalString(record.desktopEntry),
+    category: optionalString(record.category),
+    urgency: optionalInteger(record.urgency),
+    actions: actions.map((action) => {
+      const actionRecord = asRecord(action);
+      if (!actionRecord) throw new DesktopAgentProtocolError("INVALID_NOTIFICATIONS", "Desktop notification action must be an object.");
+      return {
+        id: requiredString(actionRecord.id, "notification.action.id"),
+        label: requiredString(actionRecord.label, "notification.action.label"),
+      };
+    }),
+    expireTimeoutMs: requiredInteger(record.expireTimeoutMs, "notification.expireTimeoutMs"),
+    createdAt: requiredString(record.createdAt, "notification.createdAt"),
+    closedAt: optionalString(record.closedAt),
+    closeReason: optionalInteger(record.closeReason),
+  };
+}
+
 function decodeCapabilityStatus(value: unknown): DesktopCapabilityStatus {
   const record = asRecord(value);
   const state = requiredString(record?.state, "capability.state");
@@ -960,6 +1021,7 @@ function isDesktopAgentMethod(value: string): value is DesktopAgentMethod {
     || value === "logs.sources"
     || value === "logs.read"
     || value === "trace.correlate"
+    || value === "notifications.recent"
     || value === "desktop.stop";
 }
 
@@ -987,7 +1049,9 @@ function isDesktopActivityEventType(value: string): value is DesktopActivityEven
     || value === "network.listener.opened"
     || value === "network.listener.closed"
     || value === "network.tunnel.started"
-    || value === "network.tunnel.stopped";
+    || value === "network.tunnel.stopped"
+    || value === "notification.created"
+    || value === "notification.closed";
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

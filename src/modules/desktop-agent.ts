@@ -14,6 +14,7 @@ import type {
   DesktopDeviceInfo,
   DesktopDisplayInfo,
   DesktopNetworkSnapshot,
+  DesktopNotificationInfo,
   DesktopLogReadResult,
   DesktopLogSource,
   DesktopTraceCorrelation,
@@ -269,7 +270,7 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
     {
       title: "Recent Desktop Activity",
       description:
-        "Read the isolated desktop agent's bounded in-memory activity timeline for recent process, window, display, PipeWire audio, hardware-device, and network-state changes. The cursor is monotonically increasing while the agent is running, so callers can remember a cursor before an action and compare later events. No keystrokes, screenshots, packet contents, command-line arguments, environment contents, raw hardware serials, or Bluetooth addresses are recorded.",
+        "Read the isolated desktop agent's bounded in-memory activity timeline for recent process, window, display, PipeWire audio, hardware-device, network-state, and desktop-notification changes. The cursor is monotonically increasing while the agent is running, so callers can remember a cursor before an action and compare later events. No keystrokes, screenshots, packet contents, command-line arguments, environment contents, raw hardware serials, or Bluetooth addresses are recorded.",
       inputSchema: {},
       outputSchema: {
         status: z.enum(["ready", "error"]),
@@ -303,8 +304,10 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
             "network.listener.closed",
             "network.tunnel.started",
             "network.tunnel.stopped",
+            "notification.created",
+            "notification.closed",
           ]),
-          sourceModule: z.enum(["processes", "windows", "displays", "audio", "devices", "network"]),
+          sourceModule: z.enum(["processes", "windows", "displays", "audio", "devices", "network", "notifications"]),
           entityId: z.string(),
           correlationId: z.string(),
           applicationId: z.string().optional(),
@@ -623,6 +626,52 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
 
   registerAppTool(
     server,
+    "desktop_recent_notifications",
+    {
+      title: "Recent Desktop Notifications",
+      description:
+        "Read notifications passively observed by the isolated desktop agent since it started. Results are bounded and in memory only. This does not dismiss notifications, invoke actions, or capture notification image payloads.",
+      inputSchema: {},
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        notifications: z.array(z.object({
+          id: z.string(),
+          notificationId: z.number().int().optional(),
+          replacesId: z.number().int().optional(),
+          appName: z.string(),
+          summary: z.string(),
+          body: z.string(),
+          pid: z.number().int().optional(),
+          desktopEntry: z.string().optional(),
+          category: z.string().optional(),
+          urgency: z.number().int().optional(),
+          actions: z.array(z.object({ id: z.string(), label: z.string() })),
+          expireTimeoutMs: z.number().int(),
+          createdAt: z.string(),
+          closedAt: z.string().optional(),
+          closeReason: z.number().int().optional(),
+        })).optional(),
+      },
+      _meta: {},
+      annotations: readAnnotations,
+    },
+    async () => {
+      try {
+        const notifications = await client.notifications();
+        const result = formatNotificationSummary(notifications);
+        return {
+          content: [{ type: "text" as const, text: result }],
+          structuredContent: { status: "ready" as const, result, notifications },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
     "desktop_trace_correlation",
     {
       title: "Desktop Trace Correlation",
@@ -750,6 +799,11 @@ function describeStatus(status: DesktopAgentStatus): string {
     `session ${status.sessionType}`,
     `protocol ${status.protocolVersion}`,
   ].join("; ");
+}
+
+function formatNotificationSummary(notifications: DesktopNotificationInfo[]): string {
+  const open = notifications.filter((notification) => !notification.closedAt).length;
+  return `Desktop agent observed ${notifications.length} notification(s) since startup; ${open} currently not marked closed.`;
 }
 
 function formatTraceSummary(trace: DesktopTraceCorrelation): string {

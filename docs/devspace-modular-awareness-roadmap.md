@@ -60,7 +60,8 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [ ] AT-SPI accessibility tree and semantic UI actions.
 - [ ] Keyboard/mouse input control.
 - [ ] Clipboard read/write with explicit permissions.
-- [ ] Desktop notification awareness/actions.
+- [x] Read-only bounded in-memory desktop notification awareness via passive freedesktop/Plasma D-Bus observation.
+- [ ] Desktop notification actions/dismissal/reply handling with explicit permissions.
 - [x] Read-only PipeWire audio graph, application streams, channel ports, and active route links.
 - [ ] PipeWire live meters and richer runtime stream telemetry.
 - [x] Read-only Linux USB, PCI/PCIe, block-storage, and Bluetooth inventory with privacy-safe identifiers.
@@ -77,7 +78,7 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [ ] Add window focus events. Window create/close/move/resize/title/state changes are already captured by the polling timeline.
 - [x] Add PipeWire audio stream start/stop/change and route create/remove/topology-change events, while suppressing noisy link transport-state flaps.
 - [x] Add device connect/disconnect/change events with privacy-safe stable IDs.
-- [ ] Add notification events.
+- [x] Add notification creation/closure events correlated to the sender PID when Plasma provides it.
 - [ ] Add authorized filesystem events.
 - [x] Add network events for interface state/address changes, route/DNS changes, listener open/close, and Cloudflare Tunnel start/stop. Display connect/disconnect/layout/mode/brightness changes are already captured.
 - [x] Build a bounded in-memory activity timeline that can answer questions such as “what happened after I clicked Generate?” by comparing event sequence cursors.

@@ -18,6 +18,11 @@ import {
   readLinuxLogs,
   readLinuxLogsForPid,
 } from "./desktop-logs-linux.js";
+import {
+  LinuxNotificationMonitor,
+  linuxNotificationAwarenessAvailable,
+  type DesktopNotificationMonitor,
+} from "./desktop-notifications-linux.js";
 import { appendFileSync, chmodSync, rmSync } from "node:fs";
 import { createServer, type Server as NetServer, type Socket } from "node:net";
 import {
@@ -41,6 +46,7 @@ import {
   type DesktopDeviceInfo,
   type DesktopDisplayInfo,
   type DesktopNetworkSnapshot,
+  type DesktopNotificationInfo,
   type DesktopLogReadResult,
   type DesktopLogSource,
   type DesktopTraceCorrelation,
@@ -76,6 +82,8 @@ export interface DesktopAgentDaemonOptions {
   logSources?: () => Promise<DesktopLogSource[]>;
   readLogs?: (sourceId: string, options?: { lines?: number; query?: string }) => Promise<DesktopLogReadResult>;
   readLogsForPid?: (pid: number, options?: { lines?: number; query?: string }) => Promise<DesktopLogReadResult>;
+  notificationMonitor?: DesktopNotificationMonitor;
+  notifications?: () => Promise<DesktopNotificationInfo[]>;
   activityMonitor?: DesktopActivityMonitor;
   now?: () => number;
   onClosed?: () => void;
@@ -94,6 +102,8 @@ export class DesktopAgentDaemon {
   private readonly logSourcesProvider: () => Promise<DesktopLogSource[]>;
   private readonly readLogsProvider: (sourceId: string, options?: { lines?: number; query?: string }) => Promise<DesktopLogReadResult>;
   private readonly readLogsForPidProvider: (pid: number, options?: { lines?: number; query?: string }) => Promise<DesktopLogReadResult>;
+  private readonly notificationMonitor?: DesktopNotificationMonitor;
+  private readonly notificationsProvider: () => Promise<DesktopNotificationInfo[]>;
   private readonly activityMonitor: DesktopActivityMonitor;
   private readonly now: () => number;
   private readonly onClosed?: () => void;
@@ -118,6 +128,8 @@ export class DesktopAgentDaemon {
     this.logSourcesProvider = options.logSources ?? listLinuxLogSources;
     this.readLogsProvider = options.readLogs ?? readLinuxLogs;
     this.readLogsForPidProvider = options.readLogsForPid ?? readLinuxLogsForPid;
+    this.notificationMonitor = options.notificationMonitor ?? (options.notifications ? undefined : new LinuxNotificationMonitor({ now: options.now }));
+    this.notificationsProvider = options.notifications ?? (() => Promise.resolve(this.notificationMonitor?.recent() ?? []));
     this.activityMonitor = options.activityMonitor ?? new DesktopActivityMonitor({
       windows: this.windowsProvider,
       displays: this.displaysProvider,
@@ -125,6 +137,7 @@ export class DesktopAgentDaemon {
       audio: options.audioGraph ?? (pipeWireAudioAwarenessAvailable() ? this.audioGraphProvider : undefined),
       devices: options.devices ?? (linuxDeviceAwarenessAvailable() ? this.devicesProvider : undefined),
       network: options.networkSnapshot ?? (linuxNetworkAwarenessAvailable() ? this.networkSnapshotProvider : undefined),
+      notifications: options.notifications ?? (linuxNotificationAwarenessAvailable() ? this.notificationsProvider : undefined),
       now: options.now,
     });
     this.now = options.now ?? Date.now;
@@ -147,6 +160,9 @@ export class DesktopAgentDaemon {
       if (process.platform !== "win32") chmodSync(this.paths.socketPath, 0o600);
       this.startedAt = new Date(this.now()).toISOString();
       this.stopping = false;
+      if (this.capabilitiesProvider().find((capability) => capability.id === "notifications")?.state === "ready") {
+        this.notificationMonitor?.start();
+      }
       if (this.capabilitiesProvider().find((capability) => capability.id === "events")?.state === "ready") {
         this.activityMonitor.start();
       }
@@ -189,6 +205,7 @@ export class DesktopAgentDaemon {
     if (!this.server && !this.ownsLock) return;
     this.stopping = true;
     this.activityMonitor.stop();
+    this.notificationMonitor?.stop();
     this.closePromise = (async () => {
       for (const socket of this.sockets) socket.destroy();
       this.sockets.clear();
@@ -390,6 +407,16 @@ export class DesktopAgentDaemon {
           query: request.params.query,
         });
       }
+      case "notifications.recent": {
+        const notificationsCapability = this.capabilitiesProvider().find((capability) => capability.id === "notifications");
+        if (notificationsCapability?.state !== "ready") {
+          throw new DesktopAgentProtocolError(
+            "DESKTOP_NOTIFICATIONS_UNAVAILABLE",
+            notificationsCapability?.detail ?? "Notification awareness is unavailable.",
+          );
+        }
+        return this.notificationsProvider();
+      }
       case "trace.correlate": {
         const tracingCapability = this.capabilitiesProvider().find((capability) => capability.id === "tracing");
         if (tracingCapability?.state !== "ready") {
@@ -455,7 +482,8 @@ export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
   const devicesReady = linuxDeviceAwarenessAvailable();
   const networkReady = linuxNetworkAwarenessAvailable();
   const logsReady = linuxLogAwarenessAvailable();
-  const eventsReady = windowsReady || displaysReady || processesReady || audioReady || devicesReady || networkReady;
+  const notificationsReady = linuxNotificationAwarenessAvailable();
+  const eventsReady = windowsReady || displaysReady || processesReady || audioReady || devicesReady || networkReady || notificationsReady;
   const tracingReady = logsReady && eventsReady;
   return [
     windowsReady
@@ -471,7 +499,9 @@ export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
     { id: "input", state: "not_implemented" },
     { id: "accessibility", state: "not_implemented" },
     { id: "clipboard", state: "not_implemented" },
-    { id: "notifications", state: "not_implemented" },
+    notificationsReady
+      ? { id: "notifications", state: "ready", detail: "Read-only bounded in-memory observation of freedesktop notifications delivered through Plasma" }
+      : { id: "notifications", state: "unavailable", detail: "Plasma notification D-Bus service is unavailable" },
     audioReady
       ? { id: "audio", state: "ready", detail: "Read-only PipeWire audio nodes, ports, and routing links" }
       : { id: "audio", state: "unavailable", detail: "PipeWire user-session graph is unavailable" },
@@ -488,7 +518,7 @@ export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
       ? { id: "tracing", state: "ready", detail: "Correlates bounded activity timeline entries with recent user-journal messages for pid:<pid> correlation IDs" }
       : { id: "tracing", state: "unavailable", detail: "Tracing requires both activity events and Linux user-journal access" },
     eventsReady
-      ? { id: "events", state: "ready", detail: "Bounded in-memory process/window/display/audio/device/network activity timeline" }
+      ? { id: "events", state: "ready", detail: "Bounded in-memory process/window/display/audio/device/network/notification activity timeline" }
       : { id: "events", state: "unavailable", detail: "No activity sources are available" },
   ];
 }

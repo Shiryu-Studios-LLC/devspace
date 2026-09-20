@@ -6,6 +6,7 @@ import type {
   DesktopDeviceInfo,
   DesktopDisplayInfo,
   DesktopNetworkSnapshot,
+  DesktopNotificationInfo,
   DesktopProcessInfo,
   DesktopWindowInfo,
 } from "./desktop-agent-protocol.js";
@@ -17,6 +18,7 @@ export interface DesktopActivityMonitorOptions {
   audio?: () => Promise<DesktopAudioGraph>;
   devices?: () => Promise<DesktopDeviceInfo[]>;
   network?: () => Promise<DesktopNetworkSnapshot>;
+  notifications?: () => Promise<DesktopNotificationInfo[]>;
   pollIntervalMs?: number;
   maxEvents?: number;
   now?: () => number;
@@ -32,6 +34,7 @@ export class DesktopActivityMonitor {
   private readonly audioProvider?: () => Promise<DesktopAudioGraph>;
   private readonly devicesProvider?: () => Promise<DesktopDeviceInfo[]>;
   private readonly networkProvider?: () => Promise<DesktopNetworkSnapshot>;
+  private readonly notificationsProvider?: () => Promise<DesktopNotificationInfo[]>;
   private readonly pollIntervalMs: number;
   private readonly maxEvents: number;
   private readonly now: () => number;
@@ -44,6 +47,7 @@ export class DesktopActivityMonitor {
   private audioLinks = new Map<number, DesktopAudioLink>();
   private devices = new Map<string, DesktopDeviceInfo>();
   private network?: DesktopNetworkSnapshot;
+  private notifications = new Map<string, DesktopNotificationInfo>();
   private initialized = false;
   private polling = false;
   private sequence = 0;
@@ -56,6 +60,7 @@ export class DesktopActivityMonitor {
     this.audioProvider = options.audio;
     this.devicesProvider = options.devices;
     this.networkProvider = options.network;
+    this.notificationsProvider = options.notifications;
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
     this.maxEvents = options.maxEvents ?? DEFAULT_MAX_EVENTS;
     this.now = options.now ?? Date.now;
@@ -99,12 +104,13 @@ export class DesktopActivityMonitor {
       // such as busctl, kscreen-doctor, or pw-dump. Finish those observations
       // before sampling /proc so the activity monitor does not report its own
       // probes as user process start/stop events.
-      const [windowsResult, displaysResult, audioResult, devicesResult, networkResult] = await Promise.allSettled([
+      const [windowsResult, displaysResult, audioResult, devicesResult, networkResult, notificationsResult] = await Promise.allSettled([
         this.windowsProvider(),
         this.displaysProvider(),
         this.audioProvider ? this.audioProvider() : Promise.resolve(undefined),
         this.devicesProvider ? this.devicesProvider() : Promise.resolve(undefined),
         this.networkProvider ? this.networkProvider() : Promise.resolve(undefined),
+        this.notificationsProvider ? this.notificationsProvider() : Promise.resolve(undefined),
       ]);
       const processesResult = await Promise.resolve(this.processesProvider()).then(
         (value) => ({ status: "fulfilled" as const, value }),
@@ -135,6 +141,10 @@ export class DesktopActivityMonitor {
         ? new Map(deviceList.map((device) => [device.id, device]))
         : this.devices;
       const nextNetwork = networkResult.status === "fulfilled" ? networkResult.value : undefined;
+      const notificationList = notificationsResult.status === "fulfilled" ? notificationsResult.value : undefined;
+      const nextNotifications = notificationList
+        ? new Map(notificationList.map((notification) => [notification.id, notification]))
+        : this.notifications;
 
       if (!this.initialized) {
         this.windows = nextWindows;
@@ -145,6 +155,7 @@ export class DesktopActivityMonitor {
         this.audioLinks = nextAudioLinks;
         this.devices = nextDevices;
         this.network = nextNetwork;
+        this.notifications = nextNotifications;
         this.initialized = true;
         return;
       }
@@ -158,6 +169,7 @@ export class DesktopActivityMonitor {
       }
       if (deviceList) this.diffDevices(this.devices, nextDevices);
       if (nextNetwork && this.network) this.diffNetwork(this.network, nextNetwork);
+      if (notificationList) this.diffNotifications(this.notifications, nextNotifications);
 
       this.windows = nextWindows;
       this.displays = nextDisplays;
@@ -167,6 +179,7 @@ export class DesktopActivityMonitor {
       this.audioLinks = nextAudioLinks;
       this.devices = nextDevices;
       this.network = nextNetwork ?? this.network;
+      this.notifications = nextNotifications;
     } finally {
       this.polling = false;
     }
@@ -485,6 +498,52 @@ export class DesktopActivityMonitor {
         pid: next.cloudflareTunnel.pids[0] ?? previous.cloudflareTunnel.pids[0],
         summary: `Cloudflare Tunnel ${running ? "started" : "stopped"}.`,
       });
+    }
+  }
+
+  private diffNotifications(
+    previous: Map<string, DesktopNotificationInfo>,
+    next: Map<string, DesktopNotificationInfo>,
+  ): void {
+    for (const [id, notification] of next) {
+      const old = previous.get(id);
+      if (!old) {
+        this.push({
+          type: "notification.created",
+          sourceModule: "notifications",
+          entityId: id,
+          correlationId: notification.pid !== undefined ? `pid:${notification.pid}` : `notification:${id}`,
+          applicationId: notification.desktopEntry ?? notification.appName,
+          pid: notification.pid,
+          title: notification.summary,
+          summary: `Notification received from ${notification.appName}: ${notification.summary || "(no title)"}.`,
+        });
+        if (notification.closedAt) {
+          this.push({
+            type: "notification.closed",
+            sourceModule: "notifications",
+            entityId: id,
+            correlationId: notification.pid !== undefined ? `pid:${notification.pid}` : `notification:${id}`,
+            applicationId: notification.desktopEntry ?? notification.appName,
+            pid: notification.pid,
+            title: notification.summary,
+            summary: `Notification closed from ${notification.appName}: ${notification.summary || "(no title)"}.`,
+          });
+        }
+        continue;
+      }
+      if (!old.closedAt && notification.closedAt) {
+        this.push({
+          type: "notification.closed",
+          sourceModule: "notifications",
+          entityId: id,
+          correlationId: notification.pid !== undefined ? `pid:${notification.pid}` : `notification:${id}`,
+          applicationId: notification.desktopEntry ?? notification.appName,
+          pid: notification.pid,
+          title: notification.summary,
+          summary: `Notification closed from ${notification.appName}: ${notification.summary || "(no title)"}.`,
+        });
+      }
     }
   }
 

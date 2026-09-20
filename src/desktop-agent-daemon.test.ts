@@ -430,6 +430,41 @@ test("desktop agent serves a structured read-only network snapshot", async (t) =
   assert.deepEqual(await client.networkSnapshot(), expectedNetwork);
 });
 
+test("desktop agent serves bounded recent desktop notifications without actions", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-notifications-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const expectedNotifications = [{
+    id: "dbus::1.1209:9",
+    notificationId: 15,
+    replacesId: undefined,
+    appName: "DevSpace Test",
+    summary: "Awareness test",
+    body: "Read-only observation.",
+    pid: 9460,
+    desktopEntry: "devspace",
+    category: "device",
+    urgency: 1,
+    actions: [{ id: "default", label: "Open" }],
+    expireTimeoutMs: -1,
+    createdAt: "2026-09-20T06:20:00.000Z",
+    closedAt: undefined,
+    closeReason: undefined,
+  }];
+  const daemon = new DesktopAgentDaemon({
+    stateDir,
+    capabilities: () => [{ id: "notifications", state: "ready" }],
+    notifications: async () => expectedNotifications,
+  });
+  t.after(() => daemon.close());
+  await daemon.start();
+  const client = new DesktopAgentClient({
+    stateDir,
+    spawnDaemon: () => assert.fail("existing daemon should not be respawned"),
+  });
+
+  assert.deepEqual(await client.notifications(), expectedNotifications);
+});
+
 test("desktop agent serves explicit bounded log sources and reads", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-logs-"));
   t.after(() => rm(stateDir, { recursive: true, force: true }));

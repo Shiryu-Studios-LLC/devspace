@@ -6,6 +6,7 @@ import type {
   DesktopDeviceInfo,
   DesktopDisplayInfo,
   DesktopNetworkSnapshot,
+  DesktopNotificationInfo,
   DesktopProcessInfo,
   DesktopWindowInfo,
 } from "./desktop-agent-protocol.js";
@@ -136,6 +137,42 @@ test("desktop activity monitor records network interface, route, DNS, listener, 
   assert.equal(monitor.recent()[0]?.sourceModule, "network");
   assert.equal(monitor.recent()[3]?.correlationId, "pid:999");
   assert.equal(monitor.recent()[5]?.correlationId, "network:cloudflare-tunnel");
+});
+
+test("desktop activity monitor records notification creation and closure", async () => {
+  let notifications: DesktopNotificationInfo[] = [];
+  const monitor = new DesktopActivityMonitor({
+    windows: async () => [],
+    processes: async () => [],
+    displays: async () => [],
+    notifications: async () => notifications,
+  });
+
+  await monitor.sample();
+  notifications = [{
+    id: "dbus::1.1209:9",
+    notificationId: 15,
+    appName: "DevSpace Test",
+    summary: "Awareness test",
+    body: "Read-only observation.",
+    pid: 9460,
+    desktopEntry: "devspace",
+    actions: [],
+    expireTimeoutMs: -1,
+    createdAt: "2026-09-20T06:20:00.000Z",
+  }];
+  await monitor.sample();
+  assert.deepEqual(monitor.recent().map((event) => event.type), ["notification.created"]);
+  assert.equal(monitor.recent()[0]?.correlationId, "pid:9460");
+  assert.equal(monitor.recent()[0]?.sourceModule, "notifications");
+
+  notifications = [{
+    ...notifications[0]!,
+    closedAt: "2026-09-20T06:20:01.000Z",
+    closeReason: 2,
+  }];
+  await monitor.sample();
+  assert.deepEqual(monitor.recent(2).map((event) => event.type), ["notification.created", "notification.closed"]);
 });
 
 test("desktop activity monitor records device connection, disconnection, and metadata changes", async () => {

@@ -17,6 +17,7 @@ import {
   decodeDesktopDeviceList,
   decodeDesktopDisplayList,
   decodeDesktopNetworkSnapshot,
+  decodeDesktopNotificationList,
   decodeDesktopLogReadResult,
   decodeDesktopLogSources,
   decodeDesktopTraceCorrelation,
@@ -33,6 +34,7 @@ import {
   type DesktopDeviceInfo,
   type DesktopDisplayInfo,
   type DesktopNetworkSnapshot,
+  type DesktopNotificationInfo,
   type DesktopLogReadResult,
   type DesktopLogSource,
   type DesktopTraceCorrelation,
@@ -158,6 +160,11 @@ export class DesktopAgentClient {
       ...(options.lines === undefined ? {} : { lines: options.lines }),
       ...(options.query === undefined ? {} : { query: options.query }),
     }));
+  }
+
+  async notifications(): Promise<DesktopNotificationInfo[]> {
+    await this.ensureReady();
+    return decodeDesktopNotificationList(await this.requestExisting("notifications.recent"));
   }
 
   async stop(): Promise<DesktopAgentStatus | undefined> {
