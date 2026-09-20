@@ -3,6 +3,7 @@ import {
   registerArtifactTools,
 } from "../artifact-tools.js";
 import { registerDevSpaceAdminTools } from "../devspace-admin-tools.js";
+import { registerDesktopAgentTools } from "./desktop-agent.js";
 import { registerGitTools } from "../git-tools.js";
 import { registerLocalWindowsTools } from "../local-windows-tools.js";
 import { registerUpstreamMcpTools } from "../upstream-mcp.js";
@@ -21,6 +22,11 @@ export const gitModule: DevSpaceModule = {
 export const adminModule: DevSpaceModule = {
   id: "admin",
   register: ({ server, config }) => registerDevSpaceAdminTools(server, config),
+};
+
+export const desktopAgentModule: DevSpaceModule = {
+  id: "desktop-agent",
+  register: ({ server, config }) => registerDesktopAgentTools(server, config),
 };
 
 export const windowsDesktopModule: DevSpaceModule = {
@@ -43,6 +49,7 @@ export const artifactModule: DevSpaceModule = {
 export const lateBuiltinModules: readonly DevSpaceModule[] = [
   gitModule,
   adminModule,
+  desktopAgentModule,
   windowsDesktopModule,
   artifactModule,
 ];

@@ -41,14 +41,15 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 
 ## Phase 0B — Desktop agent foundation
 
-- [ ] Add a separate `devspace-desktop-agent` process/service.
-- [ ] Use local authenticated IPC between DevSpace core and the desktop agent.
-- [ ] Add protocol version negotiation.
-- [ ] Add capability discovery.
-- [ ] Add reconnect/backoff behavior.
+- [x] Add a separate `devspace-desktop-agent` process/service.
+- [x] Use local authenticated IPC between DevSpace core and the desktop agent.
+- [ ] Add protocol version negotiation beyond strict version validation.
+- [x] Add capability discovery.
+- [ ] Add reconnect/backoff behavior for mid-request agent loss.
 - [ ] Add per-capability permissions.
-- [ ] Add health reporting and a kill switch.
-- [ ] Ensure agent failure never terminates DevSpace core.
+- [x] Add health reporting and a kill switch.
+- [x] Ensure agent failure never terminates DevSpace core.
+- [x] Launch Linux desktop agent through the user systemd manager so it inherits the active KDE graphical-session environment while core remains detached.
 
 ## Desktop modules
 

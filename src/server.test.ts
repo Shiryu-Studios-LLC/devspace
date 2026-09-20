@@ -187,6 +187,7 @@ test("module status keeps core health separate from secondary modules", async (t
     "process",
     "git",
     "admin",
+    "desktop-agent",
     "desktop-windows",
     "artifacts",
   ]) {
@@ -197,6 +198,19 @@ test("module status keeps core health separate from secondary modules", async (t
   assert.equal(statuses.get("filesystem"), "ready");
   assert.equal(statuses.get("git"), "ready");
   assert.equal(statuses.get("admin"), "ready");
+  assert.equal(statuses.get("desktop-agent"), "ready");
+
+  for (const name of [
+    "desktop_agent_status",
+    "desktop_agent_capabilities",
+    "desktop_agent_stop",
+  ]) {
+    assert.equal(
+      tools.tools.some((tool) => tool.name === name),
+      true,
+      `${name} should be exposed by the desktop-agent module`,
+    );
+  }
 });
 
 test("concurrent checkout opens return one full context and one reuse instruction", async (t) => {
