@@ -215,6 +215,67 @@ export interface DesktopDeviceInfo {
   mountpoints: string[];
 }
 
+export interface DesktopNetworkAddress {
+  family: "ipv4" | "ipv6";
+  address: string;
+  prefixLength: number;
+  scope?: string;
+  dynamic?: boolean;
+}
+
+export interface DesktopNetworkInterface {
+  index: number;
+  name: string;
+  kind: string;
+  linkType?: string;
+  operState: string;
+  mtu?: number;
+  up: boolean;
+  lowerUp: boolean;
+  loopback: boolean;
+  addresses: DesktopNetworkAddress[];
+}
+
+export interface DesktopNetworkRoute {
+  family: "ipv4" | "ipv6";
+  destination: string;
+  gateway?: string;
+  interfaceName?: string;
+  table?: string | number;
+  protocol?: string;
+  scope?: string;
+  preferredSource?: string;
+  metric?: number;
+  type?: string;
+  linkDown: boolean;
+}
+
+export interface DesktopNetworkDnsServer {
+  interfaceName?: string;
+  address: string;
+}
+
+export interface DesktopNetworkListener {
+  protocol: "tcp" | "udp";
+  address: string;
+  port: number;
+  interfaceName?: string;
+  processName?: string;
+  pid?: number;
+}
+
+export interface DesktopNetworkSnapshot {
+  generatedAt: string;
+  interfaces: DesktopNetworkInterface[];
+  routes: DesktopNetworkRoute[];
+  dnsServers: DesktopNetworkDnsServer[];
+  listeners: DesktopNetworkListener[];
+  cloudflareTunnel: {
+    running: boolean;
+    pids: number[];
+  };
+}
+
 export type DesktopAgentMethod =
   | "hello"
   | "desktop.status"
@@ -225,6 +286,7 @@ export type DesktopAgentMethod =
   | "events.recent"
   | "audio.graph"
   | "devices.list"
+  | "network.snapshot"
   | "desktop.stop";
 
 export type DesktopAgentRequest = {
@@ -380,6 +442,28 @@ export function decodeDesktopDeviceList(value: unknown): DesktopDeviceInfo[] {
     throw new DesktopAgentProtocolError("INVALID_DEVICES", "Desktop agent returned an invalid device list.");
   }
   return value.map(decodeDesktopDeviceInfo);
+}
+
+export function decodeDesktopNetworkSnapshot(value: unknown): DesktopNetworkSnapshot {
+  const record = asRecord(value);
+  if (!record || !Array.isArray(record.interfaces) || !Array.isArray(record.routes) || !Array.isArray(record.dnsServers) || !Array.isArray(record.listeners)) {
+    throw new DesktopAgentProtocolError("INVALID_NETWORK", "Desktop agent returned an invalid network snapshot.");
+  }
+  const tunnel = asRecord(record.cloudflareTunnel);
+  if (!tunnel) {
+    throw new DesktopAgentProtocolError("INVALID_NETWORK", "Desktop agent returned invalid Cloudflare tunnel state.");
+  }
+  return {
+    generatedAt: requiredString(record.generatedAt, "network.generatedAt"),
+    interfaces: record.interfaces.map(decodeDesktopNetworkInterface),
+    routes: record.routes.map(decodeDesktopNetworkRoute),
+    dnsServers: record.dnsServers.map(decodeDesktopNetworkDnsServer),
+    listeners: record.listeners.map(decodeDesktopNetworkListener),
+    cloudflareTunnel: {
+      running: requiredBoolean(tunnel.running, "network.cloudflareTunnel.running"),
+      pids: integerArray(tunnel.pids, "network.cloudflareTunnel.pids"),
+    },
+  };
 }
 
 export function desktopAgentProtocolVersion(): number {
@@ -600,6 +684,92 @@ function decodeDesktopDeviceInfo(value: unknown): DesktopDeviceInfo {
   };
 }
 
+function decodeDesktopNetworkInterface(value: unknown): DesktopNetworkInterface {
+  const record = asRecord(value);
+  if (!record) throw new DesktopAgentProtocolError("INVALID_NETWORK", "Desktop network interface must be an object.");
+  return {
+    index: requiredInteger(record.index, "network.interface.index"),
+    name: requiredString(record.name, "network.interface.name"),
+    kind: requiredString(record.kind, "network.interface.kind"),
+    linkType: optionalString(record.linkType),
+    operState: requiredString(record.operState, "network.interface.operState"),
+    mtu: optionalInteger(record.mtu),
+    up: requiredBoolean(record.up, "network.interface.up"),
+    lowerUp: requiredBoolean(record.lowerUp, "network.interface.lowerUp"),
+    loopback: requiredBoolean(record.loopback, "network.interface.loopback"),
+    addresses: Array.isArray(record.addresses)
+      ? record.addresses.map(decodeDesktopNetworkAddress)
+      : (() => { throw new DesktopAgentProtocolError("INVALID_NETWORK", "Invalid network.interface.addresses."); })(),
+  };
+}
+
+function decodeDesktopNetworkAddress(value: unknown): DesktopNetworkAddress {
+  const record = asRecord(value);
+  if (!record) throw new DesktopAgentProtocolError("INVALID_NETWORK", "Desktop network address must be an object.");
+  const family = requiredString(record.family, "network.address.family");
+  if (family !== "ipv4" && family !== "ipv6") {
+    throw new DesktopAgentProtocolError("INVALID_NETWORK", `Invalid network address family: ${family}`);
+  }
+  return {
+    family,
+    address: requiredString(record.address, "network.address.address"),
+    prefixLength: requiredInteger(record.prefixLength, "network.address.prefixLength"),
+    scope: optionalString(record.scope),
+    dynamic: optionalBoolean(record.dynamic),
+  };
+}
+
+function decodeDesktopNetworkRoute(value: unknown): DesktopNetworkRoute {
+  const record = asRecord(value);
+  if (!record) throw new DesktopAgentProtocolError("INVALID_NETWORK", "Desktop network route must be an object.");
+  const family = requiredString(record.family, "network.route.family");
+  if (family !== "ipv4" && family !== "ipv6") {
+    throw new DesktopAgentProtocolError("INVALID_NETWORK", `Invalid network route family: ${family}`);
+  }
+  const table = typeof record.table === "string" || (typeof record.table === "number" && Number.isFinite(record.table))
+    ? record.table
+    : undefined;
+  return {
+    family,
+    destination: requiredString(record.destination, "network.route.destination"),
+    gateway: optionalString(record.gateway),
+    interfaceName: optionalString(record.interfaceName),
+    table,
+    protocol: optionalString(record.protocol),
+    scope: optionalString(record.scope),
+    preferredSource: optionalString(record.preferredSource),
+    metric: optionalInteger(record.metric),
+    type: optionalString(record.type),
+    linkDown: requiredBoolean(record.linkDown, "network.route.linkDown"),
+  };
+}
+
+function decodeDesktopNetworkDnsServer(value: unknown): DesktopNetworkDnsServer {
+  const record = asRecord(value);
+  if (!record) throw new DesktopAgentProtocolError("INVALID_NETWORK", "Desktop DNS server must be an object.");
+  return {
+    interfaceName: optionalString(record.interfaceName),
+    address: requiredString(record.address, "network.dns.address"),
+  };
+}
+
+function decodeDesktopNetworkListener(value: unknown): DesktopNetworkListener {
+  const record = asRecord(value);
+  if (!record) throw new DesktopAgentProtocolError("INVALID_NETWORK", "Desktop network listener must be an object.");
+  const protocol = requiredString(record.protocol, "network.listener.protocol");
+  if (protocol !== "tcp" && protocol !== "udp") {
+    throw new DesktopAgentProtocolError("INVALID_NETWORK", `Invalid listener protocol: ${protocol}`);
+  }
+  return {
+    protocol,
+    address: requiredString(record.address, "network.listener.address"),
+    port: requiredInteger(record.port, "network.listener.port"),
+    interfaceName: optionalString(record.interfaceName),
+    processName: optionalString(record.processName),
+    pid: optionalInteger(record.pid),
+  };
+}
+
 function decodeCapabilityStatus(value: unknown): DesktopCapabilityStatus {
   const record = asRecord(value);
   const state = requiredString(record?.state, "capability.state");
@@ -623,6 +793,7 @@ function isDesktopAgentMethod(value: string): value is DesktopAgentMethod {
     || value === "events.recent"
     || value === "audio.graph"
     || value === "devices.list"
+    || value === "network.snapshot"
     || value === "desktop.stop";
 }
 

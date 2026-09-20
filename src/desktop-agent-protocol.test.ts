@@ -11,6 +11,7 @@ import {
   decodeDesktopAudioGraph,
   decodeDesktopDeviceList,
   decodeDesktopDisplayList,
+  decodeDesktopNetworkSnapshot,
   decodeDesktopProcessList,
   decodeDesktopWindowList,
   encodeDesktopAgentRequest,
@@ -79,6 +80,17 @@ test("desktop agent accepts the read-only device list method", () => {
     protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
     authToken: "a".repeat(64),
     method: "devices.list",
+    params: {},
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
+});
+
+test("desktop agent accepts the read-only network snapshot method", () => {
+  const request: DesktopAgentRequest = {
+    requestId: "request-network",
+    protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
+    authToken: "a".repeat(64),
+    method: "network.snapshot",
     params: {},
   };
   assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
@@ -325,6 +337,31 @@ test("desktop agent decodes a structured device list without raw serial or Bluet
   assert.equal(devices[1]?.paired, true);
   assert.equal(Object.hasOwn(devices[1] ?? {}, "serial"), false);
   assert.equal(Object.hasOwn(devices[1] ?? {}, "address"), false);
+});
+
+test("desktop agent decodes a structured network snapshot", () => {
+  const network = decodeDesktopNetworkSnapshot({
+    generatedAt: "2026-09-20T03:00:00.000Z",
+    interfaces: [{
+      index: 2,
+      name: "enp5s0",
+      kind: "ethernet",
+      linkType: "ether",
+      operState: "UP",
+      mtu: 1500,
+      up: true,
+      lowerUp: true,
+      loopback: false,
+      addresses: [{ family: "ipv4", address: "192.168.1.10", prefixLength: 24, scope: "global", dynamic: true }],
+    }],
+    routes: [{ family: "ipv4", destination: "default", gateway: "192.168.1.1", interfaceName: "enp5s0", table: "main", protocol: "dhcp", linkDown: false }],
+    dnsServers: [{ interfaceName: "enp5s0", address: "192.168.1.1" }],
+    listeners: [{ protocol: "tcp", address: "127.0.0.1", port: 7676, processName: "node", pid: 1234 }],
+    cloudflareTunnel: { running: true, pids: [4321] },
+  });
+  assert.equal(network.interfaces[0]?.name, "enp5s0");
+  assert.equal(network.listeners[0]?.port, 7676);
+  assert.equal(network.cloudflareTunnel.running, true);
 });
 
 test("desktop agent response and status decode capability states", () => {

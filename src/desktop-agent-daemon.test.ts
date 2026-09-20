@@ -393,6 +393,43 @@ test("desktop agent serves a structured read-only device inventory", async (t) =
   assert.equal(JSON.stringify(await client.devices()).includes("serial"), false);
 });
 
+test("desktop agent serves a structured read-only network snapshot", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-network-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const expectedNetwork = {
+    generatedAt: "2026-09-20T03:00:00.000Z",
+    interfaces: [{
+      index: 2,
+      name: "enp5s0",
+      kind: "ethernet",
+      linkType: "ether",
+      operState: "UP",
+      mtu: 1500,
+      up: true,
+      lowerUp: true,
+      loopback: false,
+      addresses: [{ family: "ipv4" as const, address: "192.168.1.10", prefixLength: 24, scope: "global", dynamic: true }],
+    }],
+    routes: [{ family: "ipv4" as const, destination: "default", gateway: "192.168.1.1", interfaceName: "enp5s0", table: "main", protocol: "dhcp", scope: undefined, preferredSource: undefined, metric: undefined, type: undefined, linkDown: false }],
+    dnsServers: [{ interfaceName: "enp5s0", address: "192.168.1.1" }],
+    listeners: [{ protocol: "tcp" as const, address: "127.0.0.1", port: 7676, interfaceName: undefined, processName: "node", pid: 1234 }],
+    cloudflareTunnel: { running: true, pids: [4321] },
+  };
+  const daemon = new DesktopAgentDaemon({
+    stateDir,
+    capabilities: () => [{ id: "network", state: "ready" }],
+    networkSnapshot: async () => expectedNetwork,
+  });
+  t.after(() => daemon.close());
+  await daemon.start();
+  const client = new DesktopAgentClient({
+    stateDir,
+    spawnDaemon: () => assert.fail("existing daemon should not be respawned"),
+  });
+
+  assert.deepEqual(await client.networkSnapshot(), expectedNetwork);
+});
+
 test("desktop agent client can auto-start and stop an isolated daemon", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-autostart-"));
   t.after(() => rm(stateDir, { recursive: true, force: true }));

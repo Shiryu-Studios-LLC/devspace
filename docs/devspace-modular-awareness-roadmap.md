@@ -65,7 +65,7 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [ ] PipeWire live meters and richer runtime stream telemetry.
 - [x] Read-only Linux USB, PCI/PCIe, block-storage, and Bluetooth inventory with privacy-safe identifiers.
 - [x] Hardware/device connect/disconnect/state-change events in the bounded activity timeline.
-- [ ] Network interface/route/service awareness.
+- [x] Network interface/route/service awareness (read-only Linux interfaces, addresses, routes, DNS, listeners, and Cloudflare Tunnel process state).
 - [ ] Authorized filesystem watchers.
 - [ ] Application log/tracing correlation.
 - [ ] Browser-session integration where explicitly authorized.

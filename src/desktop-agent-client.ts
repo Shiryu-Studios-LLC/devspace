@@ -16,6 +16,7 @@ import {
   decodeDesktopAgentStatus,
   decodeDesktopDeviceList,
   decodeDesktopDisplayList,
+  decodeDesktopNetworkSnapshot,
   decodeDesktopProcessList,
   decodeDesktopWindowList,
   encodeDesktopAgentRequest,
@@ -28,6 +29,7 @@ import {
   type DesktopCapabilityStatus,
   type DesktopDeviceInfo,
   type DesktopDisplayInfo,
+  type DesktopNetworkSnapshot,
   type DesktopProcessInfo,
   type DesktopWindowInfo,
 } from "./desktop-agent-protocol.js";
@@ -122,6 +124,11 @@ export class DesktopAgentClient {
   async devices(): Promise<DesktopDeviceInfo[]> {
     await this.ensureReady();
     return decodeDesktopDeviceList(await this.requestExisting("devices.list"));
+  }
+
+  async networkSnapshot(): Promise<DesktopNetworkSnapshot> {
+    await this.ensureReady();
+    return decodeDesktopNetworkSnapshot(await this.requestExisting("network.snapshot"));
   }
 
   async stop(): Promise<DesktopAgentStatus | undefined> {

@@ -13,6 +13,7 @@ import type {
   DesktopCapabilityStatus,
   DesktopDeviceInfo,
   DesktopDisplayInfo,
+  DesktopNetworkSnapshot,
   DesktopProcessInfo,
   DesktopWindowInfo,
 } from "../desktop-agent-protocol.js";
@@ -449,6 +450,85 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
 
   registerAppTool(
     server,
+    "desktop_network_snapshot",
+    {
+      title: "Desktop Network Snapshot",
+      description:
+        "Read the current Linux network state from the isolated desktop agent: interfaces/addresses, routes, DNS servers, listening TCP/UDP sockets, and whether Cloudflare Tunnel is running. Read-only; no packet capture or traffic contents are collected.",
+      inputSchema: {},
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        network: z.object({
+          generatedAt: z.string(),
+          interfaces: z.array(z.object({
+            index: z.number().int(),
+            name: z.string(),
+            kind: z.string(),
+            linkType: z.string().optional(),
+            operState: z.string(),
+            mtu: z.number().int().optional(),
+            up: z.boolean(),
+            lowerUp: z.boolean(),
+            loopback: z.boolean(),
+            addresses: z.array(z.object({
+              family: z.enum(["ipv4", "ipv6"]),
+              address: z.string(),
+              prefixLength: z.number().int(),
+              scope: z.string().optional(),
+              dynamic: z.boolean().optional(),
+            })),
+          })),
+          routes: z.array(z.object({
+            family: z.enum(["ipv4", "ipv6"]),
+            destination: z.string(),
+            gateway: z.string().optional(),
+            interfaceName: z.string().optional(),
+            table: z.union([z.string(), z.number()]).optional(),
+            protocol: z.string().optional(),
+            scope: z.string().optional(),
+            preferredSource: z.string().optional(),
+            metric: z.number().int().optional(),
+            type: z.string().optional(),
+            linkDown: z.boolean(),
+          })),
+          dnsServers: z.array(z.object({
+            interfaceName: z.string().optional(),
+            address: z.string(),
+          })),
+          listeners: z.array(z.object({
+            protocol: z.enum(["tcp", "udp"]),
+            address: z.string(),
+            port: z.number().int().nonnegative(),
+            interfaceName: z.string().optional(),
+            processName: z.string().optional(),
+            pid: z.number().int().optional(),
+          })),
+          cloudflareTunnel: z.object({
+            running: z.boolean(),
+            pids: z.array(z.number().int()),
+          }),
+        }).optional(),
+      },
+      _meta: {},
+      annotations: readAnnotations,
+    },
+    async () => {
+      try {
+        const network = await client.networkSnapshot();
+        const result = formatNetworkSummary(network);
+        return {
+          content: [{ type: "text" as const, text: result }],
+          structuredContent: { status: "ready" as const, result, network },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
     "desktop_agent_stop",
     {
       title: "Stop Desktop Agent",
@@ -513,6 +593,12 @@ function describeStatus(status: DesktopAgentStatus): string {
     `session ${status.sessionType}`,
     `protocol ${status.protocolVersion}`,
   ].join("; ");
+}
+
+function formatNetworkSummary(network: DesktopNetworkSnapshot): string {
+  const upInterfaces = network.interfaces.filter((networkInterface) => networkInterface.up && !networkInterface.loopback);
+  const addressed = upInterfaces.filter((networkInterface) => networkInterface.addresses.length > 0);
+  return `Network snapshot: ${network.interfaces.length} interface(s), ${addressed.length} active/addressed, ${network.routes.length} route(s), ${network.dnsServers.length} DNS server(s), ${network.listeners.length} listening socket(s), Cloudflare Tunnel ${network.cloudflareTunnel.running ? "running" : "not running"}.`;
 }
 
 function formatDeviceSummary(devices: DesktopDeviceInfo[]): string {

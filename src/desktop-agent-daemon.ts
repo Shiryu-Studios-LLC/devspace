@@ -8,6 +8,10 @@ import {
   linuxDeviceAwarenessAvailable,
   listLinuxDevices,
 } from "./desktop-devices-linux.js";
+import {
+  getLinuxNetworkSnapshot,
+  linuxNetworkAwarenessAvailable,
+} from "./desktop-network-linux.js";
 import { appendFileSync, chmodSync, rmSync } from "node:fs";
 import { createServer, type Server as NetServer, type Socket } from "node:net";
 import {
@@ -30,6 +34,7 @@ import {
   type DesktopCapabilityStatus,
   type DesktopDeviceInfo,
   type DesktopDisplayInfo,
+  type DesktopNetworkSnapshot,
   type DesktopProcessInfo,
   type DesktopWindowInfo,
 } from "./desktop-agent-protocol.js";
@@ -58,6 +63,7 @@ export interface DesktopAgentDaemonOptions {
   processes?: () => Promise<DesktopProcessInfo[]>;
   audioGraph?: () => Promise<DesktopAudioGraph>;
   devices?: () => Promise<DesktopDeviceInfo[]>;
+  networkSnapshot?: () => Promise<DesktopNetworkSnapshot>;
   activityMonitor?: DesktopActivityMonitor;
   now?: () => number;
   onClosed?: () => void;
@@ -72,6 +78,7 @@ export class DesktopAgentDaemon {
   private readonly processesProvider: () => Promise<DesktopProcessInfo[]>;
   private readonly audioGraphProvider: () => Promise<DesktopAudioGraph>;
   private readonly devicesProvider: () => Promise<DesktopDeviceInfo[]>;
+  private readonly networkSnapshotProvider: () => Promise<DesktopNetworkSnapshot>;
   private readonly activityMonitor: DesktopActivityMonitor;
   private readonly now: () => number;
   private readonly onClosed?: () => void;
@@ -92,6 +99,7 @@ export class DesktopAgentDaemon {
     this.processesProvider = options.processes ?? defaultProcessInventory;
     this.audioGraphProvider = options.audioGraph ?? getPipeWireAudioGraph;
     this.devicesProvider = options.devices ?? listLinuxDevices;
+    this.networkSnapshotProvider = options.networkSnapshot ?? getLinuxNetworkSnapshot;
     this.activityMonitor = options.activityMonitor ?? new DesktopActivityMonitor({
       windows: this.windowsProvider,
       displays: this.displaysProvider,
@@ -330,6 +338,16 @@ export class DesktopAgentDaemon {
         }
         return this.devicesProvider();
       }
+      case "network.snapshot": {
+        const networkCapability = this.capabilitiesProvider().find((capability) => capability.id === "network");
+        if (networkCapability?.state !== "ready") {
+          throw new DesktopAgentProtocolError(
+            "DESKTOP_NETWORK_UNAVAILABLE",
+            networkCapability?.detail ?? "Network awareness is unavailable.",
+          );
+        }
+        return this.networkSnapshotProvider();
+      }
       case "desktop.stop":
         this.stopping = true;
         return this.status();
@@ -369,6 +387,7 @@ export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
   const processesReady = linuxProcessAwarenessAvailable();
   const audioReady = pipeWireAudioAwarenessAvailable();
   const devicesReady = linuxDeviceAwarenessAvailable();
+  const networkReady = linuxNetworkAwarenessAvailable();
   const eventsReady = windowsReady || displaysReady || processesReady || audioReady || devicesReady;
   return [
     windowsReady
@@ -391,7 +410,9 @@ export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
     devicesReady
       ? { id: "devices", state: "ready", detail: "Read-only Linux USB, PCI, block-storage, and Bluetooth inventory without serial numbers or Bluetooth addresses" }
       : { id: "devices", state: "unavailable", detail: "Linux hardware inventory sources are unavailable" },
-    { id: "network", state: "not_implemented" },
+    networkReady
+      ? { id: "network", state: "ready", detail: "Read-only Linux interfaces, routes, DNS servers, listening sockets, and Cloudflare Tunnel process state" }
+      : { id: "network", state: "unavailable", detail: "Linux iproute2 network inventory is unavailable" },
     eventsReady
       ? { id: "events", state: "ready", detail: "Bounded in-memory process/window/display/audio/device activity timeline" }
       : { id: "events", state: "unavailable", detail: "No activity sources are available" },
