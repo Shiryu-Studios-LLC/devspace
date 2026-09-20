@@ -6,6 +6,7 @@ import {
 import {
   decodeDesktopAgentRequest,
   decodeDesktopAgentResponse,
+  decodeDesktopActivityTimeline,
   decodeDesktopAgentStatus,
   decodeDesktopDisplayList,
   decodeDesktopProcessList,
@@ -54,6 +55,17 @@ test("desktop agent accepts the read-only processes list method", () => {
     protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
     authToken: "a".repeat(64),
     method: "processes.list",
+    params: {},
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
+});
+
+test("desktop agent accepts the recent activity method", () => {
+  const request: DesktopAgentRequest = {
+    requestId: "request-events",
+    protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
+    authToken: "a".repeat(64),
+    method: "events.recent",
     params: {},
   };
   assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
@@ -160,6 +172,27 @@ test("desktop agent decodes a structured process list", () => {
   assert.equal(processes[0]?.name, "ChatGPT");
   assert.equal(processes[0]?.sameUser, true);
   assert.equal(processes[0]?.windowCount, 1);
+});
+
+test("desktop agent decodes a recent activity timeline", () => {
+  const timeline = decodeDesktopActivityTimeline({
+    cursor: 12,
+    events: [{
+      sequence: 12,
+      timestamp: "2026-09-20T01:00:00.000Z",
+      type: "window.created",
+      sourceModule: "windows",
+      entityId: "window-1",
+      correlationId: "pid:2501",
+      applicationId: "chatgpt",
+      pid: 2501,
+      title: "ChatGPT",
+      summary: "Window opened: ChatGPT.",
+    }],
+  });
+  assert.equal(timeline.cursor, 12);
+  assert.equal(timeline.events[0]?.type, "window.created");
+  assert.equal(timeline.events[0]?.correlationId, "pid:2501");
 });
 
 test("desktop agent response and status decode capability states", () => {

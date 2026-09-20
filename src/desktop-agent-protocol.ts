@@ -103,6 +103,34 @@ export interface DesktopProcessInfo {
   hasWindow: boolean;
 }
 
+export type DesktopActivityEventType =
+  | "process.started"
+  | "process.stopped"
+  | "window.created"
+  | "window.closed"
+  | "window.changed"
+  | "display.connected"
+  | "display.disconnected"
+  | "display.changed";
+
+export interface DesktopActivityEvent {
+  sequence: number;
+  timestamp: string;
+  type: DesktopActivityEventType;
+  sourceModule: "processes" | "windows" | "displays";
+  entityId: string;
+  correlationId: string;
+  applicationId?: string;
+  pid?: number;
+  title?: string;
+  summary: string;
+}
+
+export interface DesktopActivityTimeline {
+  cursor: number;
+  events: DesktopActivityEvent[];
+}
+
 export type DesktopAgentMethod =
   | "hello"
   | "desktop.status"
@@ -110,6 +138,7 @@ export type DesktopAgentMethod =
   | "windows.list"
   | "displays.list"
   | "processes.list"
+  | "events.recent"
   | "desktop.stop";
 
 export type DesktopAgentRequest = {
@@ -236,6 +265,17 @@ export function decodeDesktopProcessList(value: unknown): DesktopProcessInfo[] {
   return value.map(decodeDesktopProcessInfo);
 }
 
+export function decodeDesktopActivityTimeline(value: unknown): DesktopActivityTimeline {
+  const record = asRecord(value);
+  if (!record || !Array.isArray(record.events)) {
+    throw new DesktopAgentProtocolError("INVALID_EVENTS", "Desktop agent returned an invalid activity timeline.");
+  }
+  return {
+    cursor: requiredInteger(record.cursor, "events.cursor"),
+    events: record.events.map(decodeDesktopActivityEvent),
+  };
+}
+
 export function desktopAgentProtocolVersion(): number {
   return DESKTOP_AGENT_PROTOCOL_VERSION;
 }
@@ -339,6 +379,31 @@ function decodeDesktopProcessInfo(value: unknown): DesktopProcessInfo {
   };
 }
 
+function decodeDesktopActivityEvent(value: unknown): DesktopActivityEvent {
+  const record = asRecord(value);
+  if (!record) throw new DesktopAgentProtocolError("INVALID_EVENTS", "Desktop activity event must be an object.");
+  const type = requiredString(record.type, "event.type");
+  if (!isDesktopActivityEventType(type)) {
+    throw new DesktopAgentProtocolError("INVALID_EVENTS", `Invalid desktop activity event type: ${type}`);
+  }
+  const sourceModule = requiredString(record.sourceModule, "event.sourceModule");
+  if (sourceModule !== "processes" && sourceModule !== "windows" && sourceModule !== "displays") {
+    throw new DesktopAgentProtocolError("INVALID_EVENTS", `Invalid desktop activity source: ${sourceModule}`);
+  }
+  return {
+    sequence: requiredInteger(record.sequence, "event.sequence"),
+    timestamp: requiredString(record.timestamp, "event.timestamp"),
+    type,
+    sourceModule,
+    entityId: requiredString(record.entityId, "event.entityId"),
+    correlationId: requiredString(record.correlationId, "event.correlationId"),
+    applicationId: optionalString(record.applicationId),
+    pid: optionalInteger(record.pid),
+    title: typeof record.title === "string" ? record.title : undefined,
+    summary: requiredString(record.summary, "event.summary"),
+  };
+}
+
 function decodeCapabilityStatus(value: unknown): DesktopCapabilityStatus {
   const record = asRecord(value);
   const state = requiredString(record?.state, "capability.state");
@@ -359,7 +424,19 @@ function isDesktopAgentMethod(value: string): value is DesktopAgentMethod {
     || value === "windows.list"
     || value === "displays.list"
     || value === "processes.list"
+    || value === "events.recent"
     || value === "desktop.stop";
+}
+
+function isDesktopActivityEventType(value: string): value is DesktopActivityEventType {
+  return value === "process.started"
+    || value === "process.stopped"
+    || value === "window.created"
+    || value === "window.closed"
+    || value === "window.changed"
+    || value === "display.connected"
+    || value === "display.disconnected"
+    || value === "display.changed";
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

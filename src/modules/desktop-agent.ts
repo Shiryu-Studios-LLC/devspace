@@ -7,6 +7,7 @@ import {
   DesktopAgentClientError,
 } from "../desktop-agent-client.js";
 import type {
+  DesktopActivityTimeline,
   DesktopAgentStatus,
   DesktopCapabilityStatus,
   DesktopDisplayInfo,
@@ -258,6 +259,62 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
 
   registerAppTool(
     server,
+    "desktop_recent_activity",
+    {
+      title: "Recent Desktop Activity",
+      description:
+        "Read the isolated desktop agent's bounded in-memory activity timeline for recent process, window, and display changes. The cursor is monotonically increasing while the agent is running, so callers can remember a cursor before an action and compare later events. No keystrokes, screenshots, command-line arguments, or environment contents are recorded.",
+      inputSchema: {},
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        cursor: z.number().int().nonnegative().optional(),
+        events: z.array(z.object({
+          sequence: z.number().int().positive(),
+          timestamp: z.string(),
+          type: z.enum([
+            "process.started",
+            "process.stopped",
+            "window.created",
+            "window.closed",
+            "window.changed",
+            "display.connected",
+            "display.disconnected",
+            "display.changed",
+          ]),
+          sourceModule: z.enum(["processes", "windows", "displays"]),
+          entityId: z.string(),
+          correlationId: z.string(),
+          applicationId: z.string().optional(),
+          pid: z.number().int().optional(),
+          title: z.string().optional(),
+          summary: z.string(),
+        })).optional(),
+      },
+      _meta: {},
+      annotations: readAnnotations,
+    },
+    async () => {
+      try {
+        const activity = await client.recentActivity();
+        const result = formatActivitySummary(activity);
+        return {
+          content: [{ type: "text" as const, text: result }],
+          structuredContent: {
+            status: "ready" as const,
+            result,
+            cursor: activity.cursor,
+            events: activity.events,
+          },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
     "desktop_agent_stop",
     {
       title: "Stop Desktop Agent",
@@ -322,6 +379,15 @@ function describeStatus(status: DesktopAgentStatus): string {
     `session ${status.sessionType}`,
     `protocol ${status.protocolVersion}`,
   ].join("; ");
+}
+
+function formatActivitySummary(activity: DesktopActivityTimeline): string {
+  if (activity.events.length === 0) {
+    return `Desktop activity cursor ${activity.cursor}; no recent changes are buffered.`;
+  }
+  const first = activity.events[0]!;
+  const last = activity.events[activity.events.length - 1]!;
+  return `Desktop activity cursor ${activity.cursor}; ${activity.events.length} recent event(s), sequences ${first.sequence}-${last.sequence}.`;
 }
 
 function formatProcessSummary(processes: DesktopProcessInfo[]): string {

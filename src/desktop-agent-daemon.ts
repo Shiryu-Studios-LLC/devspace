@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import { DesktopActivityMonitor } from "./desktop-activity-monitor.js";
 import { appendFileSync, chmodSync, rmSync } from "node:fs";
 import { createServer, type Server as NetServer, type Socket } from "node:net";
 import {
@@ -45,6 +46,7 @@ export interface DesktopAgentDaemonOptions {
   windows?: () => Promise<DesktopWindowInfo[]>;
   displays?: () => Promise<DesktopDisplayInfo[]>;
   processes?: () => Promise<DesktopProcessInfo[]>;
+  activityMonitor?: DesktopActivityMonitor;
   now?: () => number;
   onClosed?: () => void;
 }
@@ -56,6 +58,7 @@ export class DesktopAgentDaemon {
   private readonly windowsProvider: () => Promise<DesktopWindowInfo[]>;
   private readonly displaysProvider: () => Promise<DesktopDisplayInfo[]>;
   private readonly processesProvider: () => Promise<DesktopProcessInfo[]>;
+  private readonly activityMonitor: DesktopActivityMonitor;
   private readonly now: () => number;
   private readonly onClosed?: () => void;
   private readonly sockets = new Set<Socket>();
@@ -73,6 +76,12 @@ export class DesktopAgentDaemon {
     this.windowsProvider = options.windows ?? listKdeWindows;
     this.displaysProvider = options.displays ?? listKdeDisplays;
     this.processesProvider = options.processes ?? defaultProcessInventory;
+    this.activityMonitor = options.activityMonitor ?? new DesktopActivityMonitor({
+      windows: this.windowsProvider,
+      displays: this.displaysProvider,
+      processes: options.processes ?? (() => listLinuxProcesses([])),
+      now: options.now,
+    });
     this.now = options.now ?? Date.now;
     this.onClosed = options.onClosed;
   }
@@ -93,6 +102,9 @@ export class DesktopAgentDaemon {
       if (process.platform !== "win32") chmodSync(this.paths.socketPath, 0o600);
       this.startedAt = new Date(this.now()).toISOString();
       this.stopping = false;
+      if (this.capabilitiesProvider().find((capability) => capability.id === "events")?.state === "ready") {
+        this.activityMonitor.start();
+      }
       writeDesktopAgentLog(this.paths, "info", "desktop_agent_started", {
         pid: process.pid,
         platform: process.platform,
@@ -131,6 +143,7 @@ export class DesktopAgentDaemon {
     if (this.closePromise) return this.closePromise;
     if (!this.server && !this.ownsLock) return;
     this.stopping = true;
+    this.activityMonitor.stop();
     this.closePromise = (async () => {
       for (const socket of this.sockets) socket.destroy();
       this.sockets.clear();
@@ -266,6 +279,19 @@ export class DesktopAgentDaemon {
         }
         return this.processesProvider();
       }
+      case "events.recent": {
+        const eventsCapability = this.capabilitiesProvider().find((capability) => capability.id === "events");
+        if (eventsCapability?.state !== "ready") {
+          throw new DesktopAgentProtocolError(
+            "DESKTOP_EVENTS_UNAVAILABLE",
+            eventsCapability?.detail ?? "Activity timeline is unavailable.",
+          );
+        }
+        return {
+          cursor: this.activityMonitor.cursor(),
+          events: this.activityMonitor.recent(),
+        };
+      }
       case "desktop.stop":
         this.stopping = true;
         return this.status();
@@ -303,6 +329,7 @@ export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
   const windowsReady = kdeWindowAwarenessAvailable();
   const displaysReady = kdeDisplayAwarenessAvailable();
   const processesReady = linuxProcessAwarenessAvailable();
+  const eventsReady = windowsReady || displaysReady || processesReady;
   return [
     windowsReady
       ? { id: "windows", state: "ready", detail: "KDE/KWin D-Bus window inventory" }
@@ -321,7 +348,9 @@ export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
     { id: "audio", state: "not_implemented" },
     { id: "devices", state: "not_implemented" },
     { id: "network", state: "not_implemented" },
-    { id: "events", state: "not_implemented" },
+    eventsReady
+      ? { id: "events", state: "ready", detail: "Bounded in-memory process/window/display activity timeline" }
+      : { id: "events", state: "unavailable", detail: "No activity sources are available" },
   ];
 }
 

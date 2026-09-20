@@ -10,12 +10,14 @@ import {
   type DesktopAgentPaths,
 } from "./desktop-agent-lifecycle.js";
 import {
+  decodeDesktopActivityTimeline,
   decodeDesktopAgentResponse,
   decodeDesktopAgentStatus,
   decodeDesktopDisplayList,
   decodeDesktopProcessList,
   decodeDesktopWindowList,
   encodeDesktopAgentRequest,
+  type DesktopActivityTimeline,
   type DesktopAgentMethod,
   type DesktopAgentRequest,
   type DesktopAgentResponse,
@@ -101,6 +103,11 @@ export class DesktopAgentClient {
   async processes(): Promise<DesktopProcessInfo[]> {
     await this.ensureReady();
     return decodeDesktopProcessList(await this.requestExisting("processes.list"));
+  }
+
+  async recentActivity(): Promise<DesktopActivityTimeline> {
+    await this.ensureReady();
+    return decodeDesktopActivityTimeline(await this.requestExisting("events.recent"));
   }
 
   async stop(): Promise<DesktopAgentStatus | undefined> {

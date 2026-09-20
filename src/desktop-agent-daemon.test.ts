@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { DesktopActivityMonitor } from "./desktop-activity-monitor.js";
 import { DesktopAgentClient } from "./desktop-agent-client.js";
 import { DesktopAgentDaemon } from "./desktop-agent-daemon.js";
 import {
@@ -196,6 +197,58 @@ test("desktop agent serves a structured process inventory without command lines"
   });
 
   assert.deepEqual(await client.processes(), [expectedProcess]);
+});
+
+test("desktop agent serves the bounded recent activity timeline", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-events-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  let processes = [{
+    pid: 100,
+    ppid: 1,
+    uid: 1000,
+    sameUser: true,
+    name: "before",
+    state: "S (sleeping)",
+    windowIds: [],
+    windowCount: 0,
+    hasWindow: false,
+  }];
+  const monitor = new DesktopActivityMonitor({
+    windows: async () => [],
+    displays: async () => [],
+    processes: async () => processes,
+    pollIntervalMs: 60_000,
+  });
+  await monitor.sample();
+  processes = [{
+    pid: 200,
+    ppid: 1,
+    uid: 1000,
+    sameUser: true,
+    name: "after",
+    state: "S (sleeping)",
+    windowIds: [],
+    windowCount: 0,
+    hasWindow: false,
+  }];
+  await monitor.sample();
+
+  const daemon = new DesktopAgentDaemon({
+    stateDir,
+    capabilities: () => [{ id: "events", state: "ready" }],
+    activityMonitor: monitor,
+  });
+  t.after(() => daemon.close());
+  await daemon.start();
+  const client = new DesktopAgentClient({
+    stateDir,
+    spawnDaemon: () => assert.fail("existing daemon should not be respawned"),
+  });
+
+  const activity = await client.recentActivity();
+  assert.equal(activity.cursor, 2);
+  assert.deepEqual(activity.events.map((event) => event.type), ["process.started", "process.stopped"]);
+  assert.equal(activity.events[0]?.correlationId, "pid:200");
 });
 
 test("desktop agent client can auto-start and stop an isolated daemon", async (t) => {
