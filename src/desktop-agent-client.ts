@@ -14,6 +14,7 @@ import {
   decodeDesktopAgentResponse,
   decodeDesktopAudioGraph,
   decodeDesktopAgentStatus,
+  decodeDesktopDeviceList,
   decodeDesktopDisplayList,
   decodeDesktopProcessList,
   decodeDesktopWindowList,
@@ -25,6 +26,7 @@ import {
   type DesktopAgentResponse,
   type DesktopAgentStatus,
   type DesktopCapabilityStatus,
+  type DesktopDeviceInfo,
   type DesktopDisplayInfo,
   type DesktopProcessInfo,
   type DesktopWindowInfo,
@@ -115,6 +117,11 @@ export class DesktopAgentClient {
   async audioGraph(): Promise<DesktopAudioGraph> {
     await this.ensureReady();
     return decodeDesktopAudioGraph(await this.requestExisting("audio.graph"));
+  }
+
+  async devices(): Promise<DesktopDeviceInfo[]> {
+    await this.ensureReady();
+    return decodeDesktopDeviceList(await this.requestExisting("devices.list"));
   }
 
   async stop(): Promise<DesktopAgentStatus | undefined> {

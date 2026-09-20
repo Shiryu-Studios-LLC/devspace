@@ -9,6 +9,7 @@ import {
   decodeDesktopActivityTimeline,
   decodeDesktopAgentStatus,
   decodeDesktopAudioGraph,
+  decodeDesktopDeviceList,
   decodeDesktopDisplayList,
   decodeDesktopProcessList,
   decodeDesktopWindowList,
@@ -67,6 +68,17 @@ test("desktop agent accepts the recent activity method", () => {
     protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
     authToken: "a".repeat(64),
     method: "events.recent",
+    params: {},
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
+});
+
+test("desktop agent accepts the read-only device list method", () => {
+  const request: DesktopAgentRequest = {
+    requestId: "request-devices",
+    protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
+    authToken: "a".repeat(64),
+    method: "devices.list",
     params: {},
   };
   assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
@@ -264,6 +276,44 @@ test("desktop agent decodes a structured PipeWire audio graph", () => {
   assert.equal(graph.nodes[1]?.applicationBinary, "Discord");
   assert.equal(graph.links[0]?.outputNodeName, "Shiryu Microphone 1");
   assert.equal(graph.links[0]?.inputNodeName, "WEBRTC VoiceEngine");
+});
+
+test("desktop agent decodes a structured device list without raw serial or Bluetooth address fields", () => {
+  const devices = decodeDesktopDeviceList([{
+    id: "usb:3-2.3.1",
+    subsystem: "usb",
+    category: "usb-device",
+    name: "Index HMD",
+    vendor: "Valve",
+    model: "Index HMD",
+    vendorId: "28de",
+    productId: "2300",
+    classCode: "00",
+    driver: "usb",
+    path: "3-2.3.1",
+    transport: "usb",
+    speed: "12 Mb/s",
+    connected: true,
+    hotplug: true,
+    removable: true,
+    mountpoints: [],
+  }, {
+    id: "bluetooth:1837773865b35b47",
+    subsystem: "bluetooth",
+    category: "bluetooth-device",
+    name: "Xbox Wireless Controller",
+    transport: "bluetooth",
+    connected: false,
+    hotplug: true,
+    removable: true,
+    paired: true,
+    mountpoints: [],
+  }]);
+  assert.equal(devices[0]?.name, "Index HMD");
+  assert.equal(devices[1]?.subsystem, "bluetooth");
+  assert.equal(devices[1]?.paired, true);
+  assert.equal(Object.hasOwn(devices[1] ?? {}, "serial"), false);
+  assert.equal(Object.hasOwn(devices[1] ?? {}, "address"), false);
 });
 
 test("desktop agent response and status decode capability states", () => {

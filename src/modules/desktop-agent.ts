@@ -11,6 +11,7 @@ import type {
   DesktopAgentStatus,
   DesktopAudioGraph,
   DesktopCapabilityStatus,
+  DesktopDeviceInfo,
   DesktopDisplayInfo,
   DesktopProcessInfo,
   DesktopWindowInfo,
@@ -394,6 +395,57 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
 
   registerAppTool(
     server,
+    "desktop_list_devices",
+    {
+      title: "List Desktop Devices",
+      description:
+        "List read-only Linux hardware/device inventory from the isolated desktop agent, including USB, PCI/PCIe, block storage, and Bluetooth devices. Raw serial numbers and Bluetooth addresses are intentionally excluded.",
+      inputSchema: {},
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        devices: z.array(z.object({
+          id: z.string(),
+          subsystem: z.enum(["usb", "pci", "block", "bluetooth"]),
+          category: z.string(),
+          name: z.string(),
+          vendor: z.string().optional(),
+          model: z.string().optional(),
+          vendorId: z.string().optional(),
+          productId: z.string().optional(),
+          classCode: z.string().optional(),
+          driver: z.string().optional(),
+          path: z.string().optional(),
+          transport: z.string().optional(),
+          speed: z.string().optional(),
+          connected: z.boolean(),
+          hotplug: z.boolean().optional(),
+          removable: z.boolean().optional(),
+          paired: z.boolean().optional(),
+          sizeBytes: z.number().int().nonnegative().optional(),
+          parentId: z.string().optional(),
+          mountpoints: z.array(z.string()),
+        })).optional(),
+      },
+      _meta: {},
+      annotations: readAnnotations,
+    },
+    async () => {
+      try {
+        const devices = await client.devices();
+        const result = formatDeviceSummary(devices);
+        return {
+          content: [{ type: "text" as const, text: result }],
+          structuredContent: { status: "ready" as const, result, devices },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
     "desktop_agent_stop",
     {
       title: "Stop Desktop Agent",
@@ -458,6 +510,15 @@ function describeStatus(status: DesktopAgentStatus): string {
     `session ${status.sessionType}`,
     `protocol ${status.protocolVersion}`,
   ].join("; ");
+}
+
+function formatDeviceSummary(devices: DesktopDeviceInfo[]): string {
+  const counts = new Map<string, number>();
+  for (const device of devices) counts.set(device.subsystem, (counts.get(device.subsystem) ?? 0) + 1);
+  const summary = ["usb", "pci", "block", "bluetooth"]
+    .map((subsystem) => `${subsystem}=${counts.get(subsystem) ?? 0}`)
+    .join(", ");
+  return `Desktop agent sees ${devices.length} hardware/device record(s): ${summary}.`;
 }
 
 function formatAudioSummary(graph: DesktopAudioGraph): string {

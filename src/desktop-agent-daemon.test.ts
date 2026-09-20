@@ -331,6 +331,68 @@ test("desktop agent serves a structured read-only PipeWire audio graph", async (
   assert.deepEqual(await client.audioGraph(), expectedGraph);
 });
 
+test("desktop agent serves a structured read-only device inventory", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-devices-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const expectedDevices = [{
+    id: "usb:3-2.3.1",
+    subsystem: "usb" as const,
+    category: "usb-device",
+    name: "Index HMD",
+    vendor: "Valve",
+    model: "Index HMD",
+    vendorId: "28de",
+    productId: "2300",
+    classCode: "00",
+    driver: "usb",
+    path: "3-2.3.1",
+    transport: "usb",
+    speed: "12 Mb/s",
+    connected: true,
+    hotplug: true,
+    removable: true,
+    paired: undefined,
+    sizeBytes: undefined,
+    parentId: undefined,
+    mountpoints: [],
+  }, {
+    id: "bluetooth:1837773865b35b47",
+    subsystem: "bluetooth" as const,
+    category: "bluetooth-device",
+    name: "Xbox Wireless Controller",
+    vendor: undefined,
+    model: undefined,
+    vendorId: undefined,
+    productId: undefined,
+    classCode: undefined,
+    driver: undefined,
+    path: undefined,
+    transport: "bluetooth",
+    speed: undefined,
+    connected: false,
+    hotplug: true,
+    removable: true,
+    paired: true,
+    sizeBytes: undefined,
+    parentId: undefined,
+    mountpoints: [],
+  }];
+  const daemon = new DesktopAgentDaemon({
+    stateDir,
+    capabilities: () => [{ id: "devices", state: "ready" }],
+    devices: async () => expectedDevices,
+  });
+  t.after(() => daemon.close());
+  await daemon.start();
+  const client = new DesktopAgentClient({
+    stateDir,
+    spawnDaemon: () => assert.fail("existing daemon should not be respawned"),
+  });
+
+  assert.deepEqual(await client.devices(), expectedDevices);
+  assert.equal(JSON.stringify(await client.devices()).includes("serial"), false);
+});
+
 test("desktop agent client can auto-start and stop an isolated daemon", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-autostart-"));
   t.after(() => rm(stateDir, { recursive: true, force: true }));

@@ -187,6 +187,31 @@ export interface DesktopAudioGraph {
   links: DesktopAudioLink[];
 }
 
+export type DesktopDeviceSubsystem = "usb" | "pci" | "block" | "bluetooth";
+
+export interface DesktopDeviceInfo {
+  id: string;
+  subsystem: DesktopDeviceSubsystem;
+  category: string;
+  name: string;
+  vendor?: string;
+  model?: string;
+  vendorId?: string;
+  productId?: string;
+  classCode?: string;
+  driver?: string;
+  path?: string;
+  transport?: string;
+  speed?: string;
+  connected: boolean;
+  hotplug?: boolean;
+  removable?: boolean;
+  paired?: boolean;
+  sizeBytes?: number;
+  parentId?: string;
+  mountpoints: string[];
+}
+
 export type DesktopAgentMethod =
   | "hello"
   | "desktop.status"
@@ -196,6 +221,7 @@ export type DesktopAgentMethod =
   | "processes.list"
   | "events.recent"
   | "audio.graph"
+  | "devices.list"
   | "desktop.stop";
 
 export type DesktopAgentRequest = {
@@ -344,6 +370,13 @@ export function decodeDesktopAudioGraph(value: unknown): DesktopAudioGraph {
     ports: record.ports.map(decodeDesktopAudioPort),
     links: record.links.map(decodeDesktopAudioLink),
   };
+}
+
+export function decodeDesktopDeviceList(value: unknown): DesktopDeviceInfo[] {
+  if (!Array.isArray(value)) {
+    throw new DesktopAgentProtocolError("INVALID_DEVICES", "Desktop agent returned an invalid device list.");
+  }
+  return value.map(decodeDesktopDeviceInfo);
 }
 
 export function desktopAgentProtocolVersion(): number {
@@ -533,6 +566,37 @@ function decodeDesktopAudioLink(value: unknown): DesktopAudioLink {
   };
 }
 
+function decodeDesktopDeviceInfo(value: unknown): DesktopDeviceInfo {
+  const record = asRecord(value);
+  if (!record) throw new DesktopAgentProtocolError("INVALID_DEVICES", "Desktop device must be an object.");
+  const subsystem = requiredString(record.subsystem, "device.subsystem");
+  if (subsystem !== "usb" && subsystem !== "pci" && subsystem !== "block" && subsystem !== "bluetooth") {
+    throw new DesktopAgentProtocolError("INVALID_DEVICES", `Invalid device subsystem: ${subsystem}`);
+  }
+  return {
+    id: requiredString(record.id, "device.id"),
+    subsystem,
+    category: requiredString(record.category, "device.category"),
+    name: requiredString(record.name, "device.name"),
+    vendor: optionalString(record.vendor),
+    model: optionalString(record.model),
+    vendorId: optionalString(record.vendorId),
+    productId: optionalString(record.productId),
+    classCode: optionalString(record.classCode),
+    driver: optionalString(record.driver),
+    path: optionalString(record.path),
+    transport: optionalString(record.transport),
+    speed: optionalString(record.speed),
+    connected: requiredBoolean(record.connected, "device.connected"),
+    hotplug: optionalBoolean(record.hotplug),
+    removable: optionalBoolean(record.removable),
+    paired: optionalBoolean(record.paired),
+    sizeBytes: optionalInteger(record.sizeBytes),
+    parentId: optionalString(record.parentId),
+    mountpoints: stringArray(record.mountpoints, "device.mountpoints"),
+  };
+}
+
 function decodeCapabilityStatus(value: unknown): DesktopCapabilityStatus {
   const record = asRecord(value);
   const state = requiredString(record?.state, "capability.state");
@@ -555,6 +619,7 @@ function isDesktopAgentMethod(value: string): value is DesktopAgentMethod {
     || value === "processes.list"
     || value === "events.recent"
     || value === "audio.graph"
+    || value === "devices.list"
     || value === "desktop.stop";
 }
 

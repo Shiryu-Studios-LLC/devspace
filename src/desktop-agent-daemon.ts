@@ -4,6 +4,10 @@ import {
   getPipeWireAudioGraph,
   pipeWireAudioAwarenessAvailable,
 } from "./desktop-audio-pipewire.js";
+import {
+  linuxDeviceAwarenessAvailable,
+  listLinuxDevices,
+} from "./desktop-devices-linux.js";
 import { appendFileSync, chmodSync, rmSync } from "node:fs";
 import { createServer, type Server as NetServer, type Socket } from "node:net";
 import {
@@ -24,6 +28,7 @@ import {
   type DesktopAgentStatus,
   type DesktopAudioGraph,
   type DesktopCapabilityStatus,
+  type DesktopDeviceInfo,
   type DesktopDisplayInfo,
   type DesktopProcessInfo,
   type DesktopWindowInfo,
@@ -52,6 +57,7 @@ export interface DesktopAgentDaemonOptions {
   displays?: () => Promise<DesktopDisplayInfo[]>;
   processes?: () => Promise<DesktopProcessInfo[]>;
   audioGraph?: () => Promise<DesktopAudioGraph>;
+  devices?: () => Promise<DesktopDeviceInfo[]>;
   activityMonitor?: DesktopActivityMonitor;
   now?: () => number;
   onClosed?: () => void;
@@ -65,6 +71,7 @@ export class DesktopAgentDaemon {
   private readonly displaysProvider: () => Promise<DesktopDisplayInfo[]>;
   private readonly processesProvider: () => Promise<DesktopProcessInfo[]>;
   private readonly audioGraphProvider: () => Promise<DesktopAudioGraph>;
+  private readonly devicesProvider: () => Promise<DesktopDeviceInfo[]>;
   private readonly activityMonitor: DesktopActivityMonitor;
   private readonly now: () => number;
   private readonly onClosed?: () => void;
@@ -84,6 +91,7 @@ export class DesktopAgentDaemon {
     this.displaysProvider = options.displays ?? listKdeDisplays;
     this.processesProvider = options.processes ?? defaultProcessInventory;
     this.audioGraphProvider = options.audioGraph ?? getPipeWireAudioGraph;
+    this.devicesProvider = options.devices ?? listLinuxDevices;
     this.activityMonitor = options.activityMonitor ?? new DesktopActivityMonitor({
       windows: this.windowsProvider,
       displays: this.displaysProvider,
@@ -311,6 +319,16 @@ export class DesktopAgentDaemon {
         }
         return this.audioGraphProvider();
       }
+      case "devices.list": {
+        const devicesCapability = this.capabilitiesProvider().find((capability) => capability.id === "devices");
+        if (devicesCapability?.state !== "ready") {
+          throw new DesktopAgentProtocolError(
+            "DESKTOP_DEVICES_UNAVAILABLE",
+            devicesCapability?.detail ?? "Device awareness is unavailable.",
+          );
+        }
+        return this.devicesProvider();
+      }
       case "desktop.stop":
         this.stopping = true;
         return this.status();
@@ -349,6 +367,7 @@ export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
   const displaysReady = kdeDisplayAwarenessAvailable();
   const processesReady = linuxProcessAwarenessAvailable();
   const audioReady = pipeWireAudioAwarenessAvailable();
+  const devicesReady = linuxDeviceAwarenessAvailable();
   const eventsReady = windowsReady || displaysReady || processesReady || audioReady;
   return [
     windowsReady
@@ -368,7 +387,9 @@ export function defaultDesktopCapabilities(): DesktopCapabilityStatus[] {
     audioReady
       ? { id: "audio", state: "ready", detail: "Read-only PipeWire audio nodes, ports, and routing links" }
       : { id: "audio", state: "unavailable", detail: "PipeWire user-session graph is unavailable" },
-    { id: "devices", state: "not_implemented" },
+    devicesReady
+      ? { id: "devices", state: "ready", detail: "Read-only Linux USB, PCI, block-storage, and Bluetooth inventory without serial numbers or Bluetooth addresses" }
+      : { id: "devices", state: "unavailable", detail: "Linux hardware inventory sources are unavailable" },
     { id: "network", state: "not_implemented" },
     eventsReady
       ? { id: "events", state: "ready", detail: "Bounded in-memory process/window/display/audio activity timeline" }

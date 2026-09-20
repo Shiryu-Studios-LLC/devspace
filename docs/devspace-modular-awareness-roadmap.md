@@ -63,7 +63,8 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [ ] Desktop notification awareness/actions.
 - [x] Read-only PipeWire audio graph, application streams, channel ports, and active route links.
 - [ ] PipeWire live meters and richer runtime stream telemetry.
-- [ ] Hardware/device hotplug awareness.
+- [x] Read-only Linux USB, PCI/PCIe, block-storage, and Bluetooth inventory with privacy-safe identifiers.
+- [ ] Hardware/device hotplug and state-change events.
 - [ ] Network interface/route/service awareness.
 - [ ] Authorized filesystem watchers.
 - [ ] Application log/tracing correlation.
