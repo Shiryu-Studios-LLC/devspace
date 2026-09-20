@@ -28,13 +28,13 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [x] Wrap artifact tooling as a secondary module.
 - [x] Add a core `get_devspace_module_status` MCP tool.
 - [x] Add regression tests proving a failed module does not stop healthy modules.
-- [ ] Extract workspace tool registration from `server.ts` while keeping workspace state owned by core context.
-- [ ] Extract filesystem tool registration from `server.ts`.
-- [ ] Extract shell tool registration from `server.ts`.
-- [ ] Extract process-session tool registration from `server.ts`.
-- [ ] Extract local-agent tool registration from `server.ts`.
-- [ ] Extract review/checkpoint tool registration from `server.ts`.
-- [ ] Keep authentication, configuration, persistence, MCP transport, and module lifecycle in core.
+- [x] Extract workspace tool registration from `server.ts` while keeping workspace state owned by core context.
+- [x] Extract filesystem tool registration from `server.ts`.
+- [x] Extract shell tool registration from `server.ts`.
+- [x] Extract process-session tool registration from `server.ts`.
+- [x] Extract local-agent tool registration from `server.ts`.
+- [x] Extract review/checkpoint tool registration from `server.ts`.
+- [x] Keep authentication, configuration, persistence, MCP transport, and module lifecycle in core.
 - [ ] Compare the complete MCP tool/schema surface before and after extraction.
 - [x] Prove a second development build can start on a separate port with separate state while production remains healthy.
 - [ ] Run authenticated MCP end-to-end testing against a persistent second DevSpace service identity.
