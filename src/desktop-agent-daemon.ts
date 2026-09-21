@@ -1,4 +1,8 @@
 import { timingSafeEqual } from "node:crypto";
+import {
+  applicationAdapterMetadata,
+  genericAwarenessMetadata,
+} from "./application-integrations.js";
 import { DesktopActivityMonitor } from "./desktop-activity-monitor.js";
 import {
   DESKTOP_PERMISSION_IDS,
@@ -838,7 +842,7 @@ export function defaultDesktopCapabilities(
     && desktopPermissionGranted(permissions, "logs")
     && logsReady
     && eventsReady;
-  return [
+  const capabilities: DesktopCapabilityStatus[] = [
     permissionAwareCapability(permissions, "windows", windowsReady,
       "KDE/KWin D-Bus window inventory", "KDE/KWin graphical session is unavailable"),
     permissionAwareCapability(permissions, "displays", displaysReady,
@@ -904,6 +908,10 @@ export function defaultDesktopCapabilities(
         ? { id: "events", state: "ready", detail: "Bounded in-memory process/window/filesystem/display/audio/device/network/notification/virtual-desktop activity timeline" }
         : { id: "events", state: "unavailable", detail: "No permitted activity sources are available" },
   ];
+
+  return capabilities.map((capability) => capability.id === "apps-shiryugen-trace"
+    ? { ...capability, ...applicationAdapterMetadata("shiryugen") }
+    : { ...capability, ...genericAwarenessMetadata });
 }
 
 function permissionForDesktopMethod(method: DesktopAgentRequest["method"]): DesktopPermissionId | undefined {

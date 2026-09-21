@@ -32,6 +32,14 @@ assert.equal(loadConfig(baseEnv).desktopPermissions.notifications, true);
 assert.equal(loadConfig(baseEnv).desktopPermissions.screen, true);
 assert.equal(loadConfig(baseEnv).desktopPermissions.input, true);
 assert.equal(loadConfig(baseEnv).desktopPermissions["clipboard-read"], true);
+assert.deepEqual(
+  loadConfig(baseEnv).upstreamMcpServers.map(({ name, enabled }) => ({ name, enabled: enabled !== false })),
+  [
+    { name: "unity", enabled: true },
+    { name: "unreal", enabled: true },
+    { name: "blockbench", enabled: true },
+  ],
+);
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_ARTIFACTS: "1" }).artifactsEnabled, true);
 assert.equal(
   loadConfig({ ...baseEnv, DEVSPACE_ARTIFACT_MAX_FILE_BYTES: "123" }).artifactMaxFileBytes,

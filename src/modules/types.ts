@@ -29,6 +29,10 @@ export interface DevSpaceCapabilityState {
   status: DevSpaceModuleStatus;
   detail?: string;
   error?: string;
+  sourceKind?: "generic" | "application-adapter";
+  sourcePriority?: "primary" | "secondary";
+  application?: string;
+  optional?: boolean;
 }
 
 export interface DevSpaceModuleHealth {

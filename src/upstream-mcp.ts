@@ -3,6 +3,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import * as z from "zod/v4";
+import { applicationAdapterMetadata } from "./application-integrations.js";
 import type { ServerConfig } from "./config.js";
 import type { DevSpaceModuleHealth } from "./modules/types.js";
 
@@ -98,6 +99,7 @@ export function summarizeUpstreamMcpHealth(
         : status.status === "disabled"
           ? "Disabled by configuration."
           : "Configured upstream MCP server is not reachable.",
+      ...applicationAdapterMetadata(status.server, status.server),
       ...(status.error ? { error: status.error } : {}),
     })),
   };

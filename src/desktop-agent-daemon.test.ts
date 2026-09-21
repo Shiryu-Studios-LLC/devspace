@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { DesktopActivityMonitor } from "./desktop-activity-monitor.js";
 import { DesktopAgentClient, DesktopAgentClientError } from "./desktop-agent-client.js";
-import { DesktopAgentDaemon } from "./desktop-agent-daemon.js";
+import { DesktopAgentDaemon, defaultDesktopCapabilities } from "./desktop-agent-daemon.js";
 import { defaultDesktopPermissionPolicy } from "./desktop-permissions.js";
 import {
   DESKTOP_AGENT_PROTOCOL_VERSION,
@@ -19,6 +19,29 @@ import {
   encodeDesktopAgentRequest,
   encodeDesktopAgentResponse,
 } from "./desktop-agent-protocol.js";
+
+test("generic awareness is primary while ShiryuGen remains an optional secondary adapter", () => {
+  const capabilities = defaultDesktopCapabilities(defaultDesktopPermissionPolicy(), []);
+  const shiryuGen = capabilities.find((capability) => capability.id === "apps-shiryugen-trace");
+  assert.deepEqual(
+    shiryuGen && {
+      sourceKind: shiryuGen.sourceKind,
+      sourcePriority: shiryuGen.sourcePriority,
+      application: shiryuGen.application,
+      optional: shiryuGen.optional,
+    },
+    {
+      sourceKind: "application-adapter",
+      sourcePriority: "secondary",
+      application: "ShiryuGen",
+      optional: true,
+    },
+  );
+  for (const capability of capabilities.filter((entry) => entry.id !== "apps-shiryugen-trace")) {
+    assert.equal(capability.sourceKind, "generic", capability.id);
+    assert.equal(capability.sourcePriority, "primary", capability.id);
+  }
+});
 
 test("desktop agent serves authenticated status and capability requests", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-test-"));

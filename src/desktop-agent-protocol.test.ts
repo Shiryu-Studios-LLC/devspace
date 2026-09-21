@@ -990,12 +990,41 @@ test("desktop agent response and status decode capability states", () => {
       platform: "linux",
       sessionType: "x11",
       clientConnections: 1,
-      capabilities: [{ id: "windows", state: "not_implemented" }],
+      capabilities: [
+        { id: "windows", state: "not_implemented" },
+        {
+          id: "apps-shiryugen-trace",
+          state: "ready",
+          sourceKind: "application-adapter",
+          sourcePriority: "secondary",
+          application: "ShiryuGen",
+          optional: true,
+        },
+      ],
     },
   });
   assert.equal(response.ok, true);
   if (!response.ok) return;
   const status = decodeDesktopAgentStatus(response.result);
   assert.equal(status.platform, "linux");
-  assert.deepEqual(status.capabilities, [{ id: "windows", state: "not_implemented", detail: undefined }]);
+  assert.deepEqual(status.capabilities, [
+    {
+      id: "windows",
+      state: "not_implemented",
+      detail: undefined,
+      sourceKind: undefined,
+      sourcePriority: undefined,
+      application: undefined,
+      optional: undefined,
+    },
+    {
+      id: "apps-shiryugen-trace",
+      state: "ready",
+      detail: undefined,
+      sourceKind: "application-adapter",
+      sourcePriority: "secondary",
+      application: "ShiryuGen",
+      optional: true,
+    },
+  ]);
 });

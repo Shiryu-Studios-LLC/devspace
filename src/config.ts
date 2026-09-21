@@ -23,7 +23,7 @@ const DEFAULT_ARTIFACT_MAX_FILE_BYTES = 100 * 1024 * 1024;
 const DEFAULT_UPSTREAM_MCP_SERVERS: UpstreamMcpServerConfig[] = [
   { name: "unity", url: "http://127.0.0.1:8080/mcp" },
   { name: "unreal", url: "http://127.0.0.1:8001/mcp" },
-  { name: "blockbench", url: "http://127.0.0.1:8002/mcp", enabled: false },
+  { name: "blockbench", url: "http://127.0.0.1:8002/mcp" },
 ];
 
 export interface ServerConfig {

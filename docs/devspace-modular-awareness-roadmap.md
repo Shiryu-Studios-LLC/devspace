@@ -94,9 +94,9 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 
 - [x] Upstream MCP bridge tolerates offline Unity/Unreal/Blockbench servers.
 - [x] Surface per-upstream health inside the unified module/capability status model; each configured upstream reports ready/unavailable/disabled as a capability, unavailable upstreams degrade only the bridge module, and core health stays independent.
-- [ ] Add application-specific adapters only as enhancements to generic desktop awareness.
+- [x] Add application-specific adapters only as enhancements to generic desktop awareness; generic capabilities are explicitly primary while application adapters are explicitly optional secondary sources, with runtime metadata and regression coverage enforcing the precedence.
 - [x] Add an optional ShiryuGen generation-trace adapter over bounded local `server.trace.ndjson` spans, with latest/exact trace lookup, ComfyUI prompt/progress correlation, output/attachment metadata, filesystem-event enrichment, and raw prompt text excluded.
-- [ ] Keep Unreal, Unity, Blockbench, SteamVR, OBS, ShiryuAudio, ShiryuGen, and browser integrations optional.
+- [x] Keep Unreal, Unity, Blockbench, SteamVR, OBS, ShiryuAudio, ShiryuGen, and browser integrations optional; the shared integration catalog marks every named integration optional/secondary and enabled-by-default policy is independent from core availability.
 
 ## Reliability gates
 

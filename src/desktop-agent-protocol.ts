@@ -6,6 +6,10 @@ export interface DesktopCapabilityStatus {
   id: string;
   state: DesktopCapabilityState;
   detail?: string;
+  sourceKind?: "generic" | "application-adapter";
+  sourcePriority?: "primary" | "secondary";
+  application?: string;
+  optional?: boolean;
 }
 
 export interface DesktopPermissionStatus {
@@ -2065,10 +2069,25 @@ function decodeCapabilityStatus(value: unknown): DesktopCapabilityStatus {
   if (state !== "ready" && state !== "unavailable" && state !== "disabled" && state !== "not_implemented") {
     throw new DesktopAgentProtocolError("INVALID_STATUS", `Invalid desktop capability state: ${state}`);
   }
+  const sourceKind = optionalString(record?.sourceKind);
+  if (sourceKind !== undefined && sourceKind !== "generic" && sourceKind !== "application-adapter") {
+    throw new DesktopAgentProtocolError("INVALID_STATUS", `Invalid desktop capability source kind: ${sourceKind}`);
+  }
+  const sourcePriority = optionalString(record?.sourcePriority);
+  if (sourcePriority !== undefined && sourcePriority !== "primary" && sourcePriority !== "secondary") {
+    throw new DesktopAgentProtocolError("INVALID_STATUS", `Invalid desktop capability source priority: ${sourcePriority}`);
+  }
+  if (record?.optional !== undefined && typeof record.optional !== "boolean") {
+    throw new DesktopAgentProtocolError("INVALID_STATUS", "Desktop capability optional flag must be boolean.");
+  }
   return {
     id: requiredString(record?.id, "capability.id"),
     state,
     detail: optionalString(record?.detail),
+    sourceKind,
+    sourcePriority,
+    application: optionalString(record?.application),
+    optional: record?.optional as boolean | undefined,
   };
 }
 
