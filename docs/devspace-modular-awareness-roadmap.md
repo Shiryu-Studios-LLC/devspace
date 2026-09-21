@@ -75,7 +75,7 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [x] Network interface/route/service awareness (read-only Linux interfaces, addresses, routes, DNS, listeners, and Cloudflare Tunnel process state).
 - [x] Authorized filesystem watchers limited to configured DevSpace allowed roots, with realpath/symlink escape checks, explicit start/stop/list controls, opt-in recursion, bounded watcher count, and no file-content reads.
 - [x] Application log/tracing correlation for `pid:<pid>` activity IDs, combining bounded timeline events with explicit bounded Linux user-journal reads. Journal source discovery and source-specific reads are also available.
-- [ ] Browser-session integration where explicitly authorized.
+- [x] Browser-session integration where explicitly authorized; read-only Chromium-compatible CDP metadata is limited to explicitly configured loopback endpoints, browser permission gating is enforced, generic window/application awareness remains primary, and URL query strings/fragments, debugger WebSocket URLs, credentials, and local file paths are excluded.
 
 ## Event and correlation layer
 

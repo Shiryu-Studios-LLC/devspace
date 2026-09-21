@@ -48,6 +48,7 @@ export interface ServerConfig {
   logging: LoggingConfig;
   upstreamMcpServers: UpstreamMcpServerConfig[];
   desktopPermissions: DesktopPermissionPolicy;
+  browserCdpUrl?: string;
 }
 
 function parsePort(value: string | number | undefined): number {
@@ -270,6 +271,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     logging: parseLoggingConfig(env),
     upstreamMcpServers: files.config.upstreamMcpServers ?? DEFAULT_UPSTREAM_MCP_SERVERS,
     desktopPermissions: resolveDesktopPermissionPolicy(files.config.desktopPermissions),
+    browserCdpUrl: env.DEVSPACE_BROWSER_CDP_URL?.trim() || files.config.browserCdpUrl?.trim() || undefined,
   };
 }
 

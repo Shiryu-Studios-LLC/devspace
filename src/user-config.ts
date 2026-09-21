@@ -31,6 +31,7 @@ export interface DevspaceUserConfig {
   subagents?: StoredSubagentsConfig;
   upstreamMcpServers?: UpstreamMcpServerConfig[];
   desktopPermissions?: StoredDesktopPermissionPolicy;
+  browserCdpUrl?: string;
 }
 
 export interface DevspaceAuthConfig {

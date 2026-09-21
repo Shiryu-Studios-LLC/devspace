@@ -19,6 +19,7 @@ const daemon = new DesktopAgentDaemon({
   stateDir: config.stateDir,
   permissions: config.desktopPermissions,
   allowedRoots: config.allowedRoots,
+  browserCdpUrl: config.browserCdpUrl,
   onClosed: () => {
     stopPermissionWatcher?.();
     if (!shuttingDown) process.exit(0);

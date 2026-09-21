@@ -19,6 +19,7 @@ import {
   decodeDesktopFilesystemWatchInfo,
   decodeDesktopFilesystemWatchList,
   decodeDesktopVirtualDesktopSnapshot,
+  decodeDesktopBrowserSessionSnapshot,
   decodeDesktopLogReadResult,
   decodeDesktopLogSources,
   decodeDesktopTraceCorrelation,
@@ -299,6 +300,17 @@ test("desktop agent accepts the read-only virtual desktop snapshot method", () =
     protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
     authToken: "a".repeat(64),
     method: "virtual-desktops.snapshot",
+    params: {},
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
+});
+
+test("desktop agent accepts the read-only browser session method", () => {
+  const request: DesktopAgentRequest = {
+    requestId: "request-browser-session",
+    protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
+    authToken: "a".repeat(64),
+    method: "browser.session",
     params: {},
   };
   assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
@@ -834,6 +846,23 @@ test("desktop agent decodes a structured virtual desktop snapshot", () => {
   assert.equal(snapshot.currentId, "desktop-2");
   assert.equal(snapshot.desktops[1]?.name, "VR");
   assert.equal(snapshot.desktops[1]?.current, true);
+});
+
+test("desktop agent decodes a structured browser session snapshot", () => {
+  const snapshot = decodeDesktopBrowserSessionSnapshot({
+    browser: "Opera/123.0",
+    capturedAt: "2026-09-21T03:40:00.000Z",
+    tabs: [
+      { id: "page-1", type: "page", title: "Inbox", url: "https://example.com/mail" },
+    ],
+  });
+  assert.equal(snapshot.browser, "Opera/123.0");
+  assert.equal(snapshot.tabs.length, 1);
+  assert.equal(snapshot.tabs[0]?.url, "https://example.com/mail");
+  assert.throws(
+    () => decodeDesktopBrowserSessionSnapshot({ ...snapshot, tabs: [{ id: "page-1" }] }),
+    /browserTab.type/,
+  );
 });
 
 test("desktop agent decodes structured filesystem watch results", () => {

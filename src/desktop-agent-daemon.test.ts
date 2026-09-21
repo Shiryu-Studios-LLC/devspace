@@ -20,8 +20,8 @@ import {
   encodeDesktopAgentResponse,
 } from "./desktop-agent-protocol.js";
 
-test("generic awareness is primary while ShiryuGen remains an optional secondary adapter", () => {
-  const capabilities = defaultDesktopCapabilities(defaultDesktopPermissionPolicy(), []);
+test("generic awareness is primary while application adapters remain optional secondary sources", () => {
+  const capabilities = defaultDesktopCapabilities(defaultDesktopPermissionPolicy(), [], "http://127.0.0.1:9222");
   const shiryuGen = capabilities.find((capability) => capability.id === "apps-shiryugen-trace");
   assert.deepEqual(
     shiryuGen && {
@@ -37,7 +37,24 @@ test("generic awareness is primary while ShiryuGen remains an optional secondary
       optional: true,
     },
   );
-  for (const capability of capabilities.filter((entry) => entry.id !== "apps-shiryugen-trace")) {
+  const browser = capabilities.find((capability) => capability.id === "apps-browser-session");
+  assert.deepEqual(
+    browser && {
+      state: browser.state,
+      sourceKind: browser.sourceKind,
+      sourcePriority: browser.sourcePriority,
+      application: browser.application,
+      optional: browser.optional,
+    },
+    {
+      state: "ready",
+      sourceKind: "application-adapter",
+      sourcePriority: "secondary",
+      application: "Browser",
+      optional: true,
+    },
+  );
+  for (const capability of capabilities.filter((entry) => !entry.id.startsWith("apps-"))) {
     assert.equal(capability.sourceKind, "generic", capability.id);
     assert.equal(capability.sourcePriority, "primary", capability.id);
   }
@@ -958,6 +975,46 @@ test("desktop agent serves a structured read-only virtual desktop snapshot", asy
   });
 
   assert.deepEqual(await client.virtualDesktops(), expectedVirtualDesktops);
+});
+
+test("desktop agent serves read-only browser session metadata and enforces browser permission", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-browser-session-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const expectedBrowserSession = {
+    browser: "Opera/123.0",
+    capturedAt: "2026-09-20T22:45:00.000Z",
+    tabs: [
+      { id: "page-1", type: "page", title: "DevSpace", url: "https://example.com/" },
+      { id: "worker-1", type: "service_worker", title: "", url: "https://example.com/sw.js" },
+    ],
+  };
+  let providerCalls = 0;
+  const daemon = new DesktopAgentDaemon({
+    stateDir,
+    capabilities: () => [{ id: "apps-browser-session", state: "ready" }],
+    browserSession: async () => {
+      providerCalls += 1;
+      return expectedBrowserSession;
+    },
+  });
+  t.after(() => daemon.close());
+  await daemon.start();
+  const client = new DesktopAgentClient({
+    stateDir,
+    spawnDaemon: () => assert.fail("existing daemon should not be respawned"),
+  });
+
+  assert.deepEqual(await client.browserSession(), expectedBrowserSession);
+  assert.equal(providerCalls, 1);
+
+  const denied = defaultDesktopPermissionPolicy();
+  denied.browser = false;
+  daemon.updatePermissions(denied);
+  await assert.rejects(
+    () => client.browserSession(),
+    (error: unknown) => error instanceof DesktopAgentClientError && error.code === "DESKTOP_PERMISSION_DENIED",
+  );
+  assert.equal(providerCalls, 1, "denied browser permission must not reach the browser provider");
 });
 
 test("desktop agent serves bounded recent desktop notifications without actions", async (t) => {

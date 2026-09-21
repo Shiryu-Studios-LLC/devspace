@@ -32,6 +32,11 @@ assert.equal(loadConfig(baseEnv).desktopPermissions.notifications, true);
 assert.equal(loadConfig(baseEnv).desktopPermissions.screen, true);
 assert.equal(loadConfig(baseEnv).desktopPermissions.input, true);
 assert.equal(loadConfig(baseEnv).desktopPermissions["clipboard-read"], true);
+assert.equal(loadConfig(baseEnv).browserCdpUrl, undefined);
+assert.equal(
+  loadConfig({ ...baseEnv, DEVSPACE_BROWSER_CDP_URL: "http://127.0.0.1:9222" }).browserCdpUrl,
+  "http://127.0.0.1:9222",
+);
 assert.deepEqual(
   loadConfig(baseEnv).upstreamMcpServers.map(({ name, enabled }) => ({ name, enabled: enabled !== false })),
   [

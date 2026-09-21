@@ -65,6 +65,7 @@ import {
   type DesktopAgentStatus,
   type DesktopAudioGraph,
   type DesktopAudioRuntimeSnapshot,
+  type DesktopBrowserSessionSnapshot,
   type DesktopCapabilityStatus,
   type DesktopDeviceInfo,
   type DesktopDisplayInfo,
@@ -135,6 +136,11 @@ import {
   shiryuGenTraceAvailable,
   type ShiryuGenTraceProvider,
 } from "./desktop-shiryugen-trace.js";
+import {
+  browserSessionConfigured,
+  createBrowserSessionProvider,
+  type BrowserSessionProvider,
+} from "./desktop-browser-session.js";
 
 const MAX_REQUEST_BYTES = 128 * 1024;
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -158,6 +164,8 @@ export interface DesktopAgentDaemonOptions {
   devices?: () => Promise<DesktopDeviceInfo[]>;
   networkSnapshot?: () => Promise<DesktopNetworkSnapshot>;
   virtualDesktops?: () => Promise<DesktopVirtualDesktopSnapshot>;
+  browserSession?: BrowserSessionProvider;
+  browserCdpUrl?: string;
   logSources?: () => Promise<DesktopLogSource[]>;
   readLogs?: (sourceId: string, options?: { lines?: number; query?: string }) => Promise<DesktopLogReadResult>;
   readLogsForPid?: (pid: number, options?: { lines?: number; query?: string }) => Promise<DesktopLogReadResult>;
@@ -192,6 +200,7 @@ export class DesktopAgentDaemon {
   private readonly devicesProvider: () => Promise<DesktopDeviceInfo[]>;
   private readonly networkSnapshotProvider: () => Promise<DesktopNetworkSnapshot>;
   private readonly virtualDesktopsProvider: () => Promise<DesktopVirtualDesktopSnapshot>;
+  private readonly browserSessionProvider: () => Promise<DesktopBrowserSessionSnapshot>;
   private readonly logSourcesProvider: () => Promise<DesktopLogSource[]>;
   private readonly readLogsProvider: (sourceId: string, options?: { lines?: number; query?: string }) => Promise<DesktopLogReadResult>;
   private readonly readLogsForPidProvider: (pid: number, options?: { lines?: number; query?: string }) => Promise<DesktopLogReadResult>;
@@ -218,7 +227,11 @@ export class DesktopAgentDaemon {
     this.lock = new DesktopAgentLock(this.paths);
     this.permissionPolicy = options.permissions ?? defaultDesktopPermissionPolicy();
     this.allowedRoots = [...(options.allowedRoots ?? [])];
-    this.capabilitiesProvider = options.capabilities ?? (() => defaultDesktopCapabilities(this.permissionPolicy, this.allowedRoots));
+    this.capabilitiesProvider = options.capabilities ?? (() => defaultDesktopCapabilities(
+      this.permissionPolicy,
+      this.allowedRoots,
+      options.browserCdpUrl,
+    ));
     this.windowsProvider = options.windows ?? listKdeWindows;
     this.displaysProvider = options.displays ?? listKdeDisplays;
     this.processesProvider = options.processes ?? (() => defaultProcessInventory(desktopPermissionGranted(this.permissionPolicy, "windows")));
@@ -233,6 +246,7 @@ export class DesktopAgentDaemon {
     this.devicesProvider = options.devices ?? listLinuxDevices;
     this.networkSnapshotProvider = options.networkSnapshot ?? getLinuxNetworkSnapshot;
     this.virtualDesktopsProvider = options.virtualDesktops ?? getKdeVirtualDesktopSnapshot;
+    this.browserSessionProvider = options.browserSession ?? createBrowserSessionProvider({ endpoint: options.browserCdpUrl });
     this.logSourcesProvider = options.logSources ?? listLinuxLogSources;
     this.readLogsProvider = options.readLogs ?? readLinuxLogs;
     this.readLogsForPidProvider = options.readLogsForPid ?? readLinuxLogsForPid;
@@ -651,6 +665,16 @@ export class DesktopAgentDaemon {
         }
         return this.virtualDesktopsProvider();
       }
+      case "browser.session": {
+        const capability = this.capabilitiesProvider().find((item) => item.id === "apps-browser-session");
+        if (capability?.state !== "ready") {
+          throw new DesktopAgentProtocolError(
+            "DESKTOP_BROWSER_SESSION_UNAVAILABLE",
+            capability?.detail ?? "Browser session integration is unavailable.",
+          );
+        }
+        return this.browserSessionProvider();
+      }
       case "logs.sources": {
         const logsCapability = this.capabilitiesProvider().find((capability) => capability.id === "logs");
         if (logsCapability?.state !== "ready") {
@@ -807,6 +831,7 @@ export class DesktopAgentDaemon {
 export function defaultDesktopCapabilities(
   permissions: DesktopPermissionPolicy = defaultDesktopPermissionPolicy(),
   allowedRoots: string[] = [],
+  browserCdpUrl?: string,
 ): DesktopCapabilityStatus[] {
   const windowsReady = kdeWindowAwarenessAvailable();
   const displaysReady = kdeDisplayAwarenessAvailable();
@@ -826,6 +851,7 @@ export function defaultDesktopCapabilities(
   const virtualDesktopsReady = kdeVirtualDesktopAwarenessAvailable();
   const filesystemWatchReady = linuxFilesystemWatchAvailable(allowedRoots);
   const shiryuGenTraceReady = shiryuGenTraceAvailable(allowedRoots);
+  const browserSessionReady = browserSessionConfigured(browserCdpUrl);
   const eventsSourceReady = (
     (desktopPermissionGranted(permissions, "windows") && windowsReady)
     || (desktopPermissionGranted(permissions, "displays") && displaysReady)
@@ -894,6 +920,11 @@ export function defaultDesktopCapabilities(
       : shiryuGenTraceReady
         ? { id: "apps-shiryugen-trace", state: "ready", detail: "Read-only ShiryuGen generation-stage correlation from bounded local server.trace.ndjson files; prompt text is excluded" }
         : { id: "apps-shiryugen-trace", state: "unavailable", detail: "No allowed ShiryuGen server.trace.ndjson source is available" },
+    !desktopPermissionGranted(permissions, "browser")
+      ? { id: "apps-browser-session", state: "disabled", detail: "Disabled by browser permission" }
+      : browserSessionReady
+        ? { id: "apps-browser-session", state: "ready", detail: "Read-only local browser tab/session metadata through an explicitly configured loopback CDP endpoint; query strings, fragments, debugger URLs, and local file paths are excluded" }
+        : { id: "apps-browser-session", state: "unavailable", detail: "No explicitly configured local browser CDP endpoint is available" },
     permissionAwareCapability(permissions, "logs", logsReady,
       "Explicit-source bounded reads from the Linux user journal; no arbitrary filesystem paths",
       "Linux user journal is unavailable"),
@@ -909,9 +940,15 @@ export function defaultDesktopCapabilities(
         : { id: "events", state: "unavailable", detail: "No permitted activity sources are available" },
   ];
 
-  return capabilities.map((capability) => capability.id === "apps-shiryugen-trace"
-    ? { ...capability, ...applicationAdapterMetadata("shiryugen") }
-    : { ...capability, ...genericAwarenessMetadata });
+  return capabilities.map((capability) => {
+    if (capability.id === "apps-shiryugen-trace") {
+      return { ...capability, ...applicationAdapterMetadata("shiryugen") };
+    }
+    if (capability.id === "apps-browser-session") {
+      return { ...capability, ...applicationAdapterMetadata("browser") };
+    }
+    return { ...capability, ...genericAwarenessMetadata };
+  });
 }
 
 function permissionForDesktopMethod(method: DesktopAgentRequest["method"]): DesktopPermissionId | undefined {
@@ -931,6 +968,7 @@ function permissionForDesktopMethod(method: DesktopAgentRequest["method"]): Desk
     case "devices.list": return "devices";
     case "network.snapshot": return "network";
     case "virtual-desktops.snapshot": return "virtual-desktops";
+    case "browser.session": return "browser";
     case "logs.sources":
     case "logs.read": return "logs";
     case "notifications.recent": return "notifications";

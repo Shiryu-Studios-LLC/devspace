@@ -20,6 +20,7 @@ import type {
   DesktopDisplayInfo,
   DesktopNetworkSnapshot,
   DesktopVirtualDesktopSnapshot,
+  DesktopBrowserSessionSnapshot,
   DesktopNotificationInfo,
   DesktopLogReadResult,
   DesktopLogSource,
@@ -1127,6 +1128,45 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
 
   registerAppTool(
     server,
+    "desktop_browser_session",
+    {
+      title: "Desktop Browser Session",
+      description:
+        "Read bounded browser tab/session metadata from an explicitly configured local Chromium-compatible CDP endpoint. This is a secondary optional adapter; generic desktop/window awareness remains primary. Query strings, URL fragments, DevTools WebSocket URLs, and local file paths are excluded.",
+      inputSchema: {},
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        browserSession: z.object({
+          browser: z.string().optional(),
+          capturedAt: z.string(),
+          tabs: z.array(z.object({
+            id: z.string(),
+            type: z.string(),
+            title: z.string(),
+            url: z.string(),
+          })),
+        }).optional(),
+      },
+      _meta: {},
+      annotations: readAnnotations,
+    },
+    async () => {
+      try {
+        const browserSession = await client.browserSession();
+        const result = formatBrowserSessionSummary(browserSession);
+        return {
+          content: [{ type: "text" as const, text: result }],
+          structuredContent: { status: "ready" as const, result, browserSession },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
     "desktop_log_sources",
     {
       title: "Desktop Log Sources",
@@ -1742,6 +1782,11 @@ function formatLogSourceSummary(sources: DesktopLogSource[]): string {
 function formatVirtualDesktopSummary(snapshot: DesktopVirtualDesktopSnapshot): string {
   const current = snapshot.desktops.find((desktop) => desktop.current);
   return `KDE virtual desktops: ${snapshot.count} desktop(s), ${snapshot.rows} row(s), current ${current?.name ?? snapshot.currentId}.`;
+}
+
+function formatBrowserSessionSummary(snapshot: DesktopBrowserSessionSnapshot): string {
+  const pages = snapshot.tabs.filter((tab) => tab.type === "page").length;
+  return `Browser session${snapshot.browser ? ` (${snapshot.browser})` : ""}: ${snapshot.tabs.length} target(s), ${pages} page tab(s).`;
 }
 
 function formatNetworkSummary(network: DesktopNetworkSnapshot): string {

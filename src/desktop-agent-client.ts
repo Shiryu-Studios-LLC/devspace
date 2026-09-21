@@ -21,6 +21,7 @@ import {
   decodeDesktopDisplayList,
   decodeDesktopNetworkSnapshot,
   decodeDesktopVirtualDesktopSnapshot,
+  decodeDesktopBrowserSessionSnapshot,
   decodeDesktopNotificationList,
   decodeDesktopNotificationControlResult,
   decodeDesktopFilesystemWatchInfo,
@@ -51,6 +52,7 @@ import {
   type DesktopDisplayInfo,
   type DesktopNetworkSnapshot,
   type DesktopVirtualDesktopSnapshot,
+  type DesktopBrowserSessionSnapshot,
   type DesktopNotificationInfo,
   type DesktopNotificationControlRequest,
   type DesktopNotificationControlResult,
@@ -197,6 +199,10 @@ export class DesktopAgentClient {
 
   async virtualDesktops(): Promise<DesktopVirtualDesktopSnapshot> {
     return decodeDesktopVirtualDesktopSnapshot(await this.requestReady("virtual-desktops.snapshot"));
+  }
+
+  async browserSession(): Promise<DesktopBrowserSessionSnapshot> {
+    return decodeDesktopBrowserSessionSnapshot(await this.requestReady("browser.session"));
   }
 
   async logSources(): Promise<DesktopLogSource[]> {

@@ -615,6 +615,19 @@ export interface DesktopNotificationControlResult {
   completedAt: string;
 }
 
+export interface DesktopBrowserTab {
+  id: string;
+  type: string;
+  title: string;
+  url: string;
+}
+
+export interface DesktopBrowserSessionSnapshot {
+  browser?: string;
+  tabs: DesktopBrowserTab[];
+  capturedAt: string;
+}
+
 export interface DesktopFilesystemWatchInfo {
   id: string;
   path: string;
@@ -640,6 +653,7 @@ export type DesktopAgentMethod =
   | "devices.list"
   | "network.snapshot"
   | "virtual-desktops.snapshot"
+  | "browser.session"
   | "logs.sources"
   | "logs.read"
   | "trace.correlate"
@@ -1453,6 +1467,27 @@ export function decodeDesktopVirtualDesktopSnapshot(value: unknown): DesktopVirt
   };
 }
 
+export function decodeDesktopBrowserSessionSnapshot(value: unknown): DesktopBrowserSessionSnapshot {
+  const record = asRecord(value);
+  if (!record || !Array.isArray(record.tabs)) {
+    throw new DesktopAgentProtocolError("INVALID_BROWSER_SESSION", "Desktop agent returned an invalid browser session snapshot.");
+  }
+  return {
+    browser: optionalString(record.browser),
+    capturedAt: requiredString(record.capturedAt, "browserSession.capturedAt"),
+    tabs: record.tabs.map((value) => {
+      const tab = asRecord(value);
+      if (!tab) throw new DesktopAgentProtocolError("INVALID_BROWSER_SESSION", "Browser tab must be an object.");
+      return {
+        id: requiredString(tab.id, "browserTab.id"),
+        type: requiredString(tab.type, "browserTab.type"),
+        title: requiredStringAllowEmpty(tab.title, "browserTab.title"),
+        url: requiredStringAllowEmpty(tab.url, "browserTab.url"),
+      };
+    }),
+  };
+}
+
 export function decodeDesktopLogSources(value: unknown): DesktopLogSource[] {
   if (!Array.isArray(value)) {
     throw new DesktopAgentProtocolError("INVALID_LOGS", "Desktop agent returned an invalid log source list.");
@@ -2105,6 +2140,7 @@ function isDesktopAgentMethod(value: string): value is DesktopAgentMethod {
     || value === "devices.list"
     || value === "network.snapshot"
     || value === "virtual-desktops.snapshot"
+    || value === "browser.session"
     || value === "logs.sources"
     || value === "logs.read"
     || value === "trace.correlate"
@@ -2206,6 +2242,13 @@ function requiredString(value: unknown, field: string): string {
   const result = optionalString(value);
   if (!result) throw new DesktopAgentProtocolError("INVALID_REQUEST", `Missing ${field}.`);
   return result;
+}
+
+function requiredStringAllowEmpty(value: unknown, field: string): string {
+  if (typeof value !== "string") {
+    throw new DesktopAgentProtocolError("INVALID_REQUEST", `Missing ${field}.`);
+  }
+  return value;
 }
 
 function requiredInteger(value: unknown, field: string): number {
