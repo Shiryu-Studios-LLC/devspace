@@ -121,7 +121,7 @@ export function createShiryuGenTraceProvider(
       return emptyTrace(traceId, []);
     }
 
-    const sourceFiles = basePaths.flatMap((basePath) => rotatedTraceFiles(basePath, maxFiles, options.allowedRoots));
+    const sourceFiles = newestTraceFiles(basePaths, maxFiles, options.allowedRoots);
     if (traceId) {
       return readTraceById(traceId, sourceFiles, maxTotalBytes);
     }
@@ -374,6 +374,15 @@ function assignSafeDetail(
     case "formatterModel": result.formatterModel = value; break;
     case "promptSource": result.promptSource = value; break;
   }
+}
+
+function newestTraceFiles(basePaths: string[], maxFiles: number, allowedRoots: string[]): string[] {
+  return basePaths
+    .flatMap((basePath) => rotatedTraceFiles(basePath, maxFiles, allowedRoots))
+    .map((path) => ({ path, mtimeMs: statSync(path).mtimeMs }))
+    .sort((a, b) => b.mtimeMs - a.mtimeMs || a.path.localeCompare(b.path))
+    .slice(0, maxFiles)
+    .map((entry) => entry.path);
 }
 
 function rotatedTraceFiles(basePath: string, maxFiles: number, allowedRoots: string[]): string[] {

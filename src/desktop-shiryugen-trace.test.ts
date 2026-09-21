@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -199,6 +199,37 @@ test("ShiryuGen trace reader ignores malformed NDJSON lines safely", async (t) =
   assert.deepEqual(trace.stages.map((stage) => stage.stage), ["request.received"]);
 });
 
+test("ShiryuGen trace reader applies the retained-file cap globally across log roots", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "devspace-shiryugen-multiroot-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const userdataDir = join(root, "userdata");
+  const devDir = join(root, "dev");
+  await mkdir(userdataDir);
+  await mkdir(devDir);
+  const userdataBase = join(userdataDir, "server.trace.ndjson");
+  const devBase = join(devDir, "server.trace.ndjson");
+  const traceId = "shiryugen-generate-newer-root";
+
+  await writeFile(userdataBase, `${"x".repeat(1100)}\n`);
+  await writeFile(devBase, `${record({
+    traceId,
+    stage: "request.received",
+    startedAt: "2026-09-20T13:30:00.000Z",
+  })}\n`);
+  await utimes(userdataBase, new Date("2026-09-20T13:00:00.000Z"), new Date("2026-09-20T13:00:00.000Z"));
+  await utimes(devBase, new Date("2026-09-20T13:30:00.000Z"), new Date("2026-09-20T13:30:00.000Z"));
+
+  const provider = createShiryuGenTraceProvider({
+    allowedRoots: [root],
+    basePaths: [userdataBase, devBase],
+    maxFiles: 1,
+    maxTotalBytes: 1024,
+  });
+  const trace = await provider(traceId);
+  assert.equal(trace.found, true);
+  assert.deepEqual(trace.sourceFiles, [devBase]);
+});
+
 test("ShiryuGen trace reader bounds retained files and byte scanning", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "devspace-shiryugen-bounds-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -214,6 +245,8 @@ test("ShiryuGen trace reader bounds retained files and byte scanning", async (t)
     stage: "request.received",
     startedAt: "2026-09-20T12:59:00.000Z",
   })}\n`);
+  await utimes(`${base}.1`, new Date("2026-09-20T13:00:00.000Z"), new Date("2026-09-20T13:00:00.000Z"));
+  await utimes(base, new Date("2026-09-20T14:00:00.000Z"), new Date("2026-09-20T14:00:00.000Z"));
 
   const byteBounded = createShiryuGenTraceProvider({
     allowedRoots: [root],
