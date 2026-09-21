@@ -213,4 +213,3 @@ function positiveNumber(value: unknown, field: string): number {
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() !== "" ? value : undefined;
 }
-
