@@ -738,10 +738,34 @@ test("desktop agent serves a structured read-only PipeWire audio graph", async (
       inputPortName: "input_FL",
     }],
   };
+  const expectedRuntime = {
+    generatedAt: "2026-09-20T02:00:01.000Z",
+    samplingIterations: 2,
+    nodes: [{
+      id: 200,
+      stateCode: "R",
+      running: true,
+      quantum: 256,
+      rate: 48000,
+      waitUsec: 22.5,
+      busyUsec: 8.25,
+      waitRatio: 0.01,
+      busyRatio: 0,
+      errors: 3,
+      audioFormat: "F32LE",
+      channels: 2,
+      formatRate: 48000,
+      name: "WEBRTC VoiceEngine",
+    }],
+  };
   const daemon = new DesktopAgentDaemon({
     stateDir,
-    capabilities: () => [{ id: "audio", state: "ready" }],
+    capabilities: () => [
+      { id: "audio", state: "ready" },
+      { id: "audio-runtime", state: "ready" },
+    ],
     audioGraph: async () => expectedGraph,
+    audioRuntime: async () => expectedRuntime,
   });
   t.after(() => daemon.close());
   await daemon.start();
@@ -750,7 +774,39 @@ test("desktop agent serves a structured read-only PipeWire audio graph", async (
     spawnDaemon: () => assert.fail("existing daemon should not be respawned"),
   });
 
-  assert.deepEqual(await client.audioGraph(), expectedGraph);
+  const graph = await client.audioGraph();
+  assert.equal(graph.generatedAt, expectedGraph.generatedAt);
+  assert.equal(graph.nodes[1]?.applicationBinary, "Discord");
+  assert.equal(graph.links[0]?.id, 88);
+  assert.deepEqual(await client.audioRuntime(), expectedRuntime);
+});
+
+test("desktop agent blocks PipeWire runtime telemetry when audio permission is denied", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-audio-runtime-denied-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const permissions = defaultDesktopPermissionPolicy();
+  permissions.audio = false;
+  let calls = 0;
+  const daemon = new DesktopAgentDaemon({
+    stateDir,
+    permissions,
+    capabilities: () => [{ id: "audio-runtime", state: "ready" }],
+    audioRuntime: async () => {
+      calls += 1;
+      return { generatedAt: "2026-09-20T02:00:01.000Z", samplingIterations: 2, nodes: [] };
+    },
+  });
+  t.after(() => daemon.close());
+  await daemon.start();
+  const client = new DesktopAgentClient({
+    stateDir,
+    spawnDaemon: () => assert.fail("existing daemon should not be respawned"),
+  });
+
+  await assert.rejects(() => client.audioRuntime(), (error: unknown) => (
+    error instanceof DesktopAgentClientError && error.code === "DESKTOP_PERMISSION_DENIED"
+  ));
+  assert.equal(calls, 0, "denied audio runtime requests must not reach pw-top provider");
 });
 
 test("desktop agent serves a structured read-only device inventory", async (t) => {

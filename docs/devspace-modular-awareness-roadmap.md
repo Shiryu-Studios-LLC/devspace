@@ -67,8 +67,9 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [x] Read-only bounded in-memory desktop notification awareness via passive freedesktop/Plasma D-Bus observation.
 - [x] Desktop notification dismissal and advertised action invocation through native Plasma D-Bus, restricted to still-open notifications observed by the Desktop Agent and gated by `notification-actions`.
 - [ ] Desktop notification inline reply handling; Plasma exposes reply signals but no callable reply method on the discovered notification interface.
-- [x] Read-only PipeWire audio graph, application streams, channel ports, and active route links.
-- [ ] PipeWire live meters and richer runtime stream telemetry.
+- [x] Read-only PipeWire audio graph, application streams, channel ports, active route links, volume/mute/channel metadata, current format, and process-latency metadata.
+- [x] On-demand PipeWire runtime scheduling/xrun telemetry via `pw-top`, including quantum/rate, wait/busy timing, format/channels, and error counts without capturing audio samples.
+- [ ] Opt-in PipeWire peak/RMS meters; true signal levels require monitor/tap streams that consume audio samples and should remain separate from passive awareness.
 - [x] Read-only Linux USB, PCI/PCIe, block-storage, and Bluetooth inventory with privacy-safe identifiers.
 - [x] Hardware/device connect/disconnect/state-change events in the bounded activity timeline.
 - [x] Network interface/route/service awareness (read-only Linux interfaces, addresses, routes, DNS, listeners, and Cloudflare Tunnel process state).

@@ -312,6 +312,21 @@ export interface DesktopAudioNode {
   targetObject?: string;
   sampleRate?: number;
   latency?: string;
+  volume?: number;
+  mute?: boolean;
+  channelVolumes?: number[];
+  channelMap?: string[];
+  softMute?: boolean;
+  softVolumes?: number[];
+  monitorMute?: boolean;
+  monitorVolumes?: number[];
+  audioFormat?: string;
+  channels?: number;
+  streamLive?: boolean;
+  corked?: boolean;
+  processLatencyQuantum?: number;
+  processLatencyRate?: number;
+  processLatencyNs?: number;
   isStream: boolean;
   isSink: boolean;
   isSource: boolean;
@@ -344,6 +359,29 @@ export interface DesktopAudioGraph {
   nodes: DesktopAudioNode[];
   ports: DesktopAudioPort[];
   links: DesktopAudioLink[];
+}
+
+export interface DesktopAudioRuntimeNode {
+  id: number;
+  stateCode: string;
+  running: boolean;
+  quantum: number;
+  rate: number;
+  waitUsec?: number;
+  busyUsec?: number;
+  waitRatio?: number;
+  busyRatio?: number;
+  errors: number;
+  audioFormat?: string;
+  channels?: number;
+  formatRate?: number;
+  name: string;
+}
+
+export interface DesktopAudioRuntimeSnapshot {
+  generatedAt: string;
+  samplingIterations: number;
+  nodes: DesktopAudioRuntimeNode[];
 }
 
 export type DesktopDeviceSubsystem = "usb" | "pci" | "block" | "bluetooth";
@@ -533,6 +571,7 @@ export type DesktopAgentMethod =
   | "processes.list"
   | "events.recent"
   | "audio.graph"
+  | "audio.runtime"
   | "devices.list"
   | "network.snapshot"
   | "virtual-desktops.snapshot"
@@ -1262,6 +1301,18 @@ export function decodeDesktopAudioGraph(value: unknown): DesktopAudioGraph {
   };
 }
 
+export function decodeDesktopAudioRuntime(value: unknown): DesktopAudioRuntimeSnapshot {
+  const record = asRecord(value);
+  if (!record || !Array.isArray(record.nodes)) {
+    throw new DesktopAgentProtocolError("INVALID_AUDIO", "Desktop agent returned an invalid audio runtime snapshot.");
+  }
+  return {
+    generatedAt: requiredString(record.generatedAt, "audioRuntime.generatedAt"),
+    samplingIterations: requiredInteger(record.samplingIterations, "audioRuntime.samplingIterations"),
+    nodes: record.nodes.map(decodeDesktopAudioRuntimeNode),
+  };
+}
+
 export function decodeDesktopDeviceList(value: unknown): DesktopDeviceInfo[] {
   if (!Array.isArray(value)) {
     throw new DesktopAgentProtocolError("INVALID_DEVICES", "Desktop agent returned an invalid device list.");
@@ -1557,9 +1608,45 @@ function decodeDesktopAudioNode(value: unknown): DesktopAudioNode {
     targetObject: optionalString(record.targetObject),
     sampleRate: optionalInteger(record.sampleRate),
     latency: optionalString(record.latency),
+    volume: optionalNumber(record.volume),
+    mute: optionalBoolean(record.mute),
+    channelVolumes: optionalNumberArray(record.channelVolumes, "audio.node.channelVolumes"),
+    channelMap: optionalStringArray(record.channelMap, "audio.node.channelMap"),
+    softMute: optionalBoolean(record.softMute),
+    softVolumes: optionalNumberArray(record.softVolumes, "audio.node.softVolumes"),
+    monitorMute: optionalBoolean(record.monitorMute),
+    monitorVolumes: optionalNumberArray(record.monitorVolumes, "audio.node.monitorVolumes"),
+    audioFormat: optionalString(record.audioFormat),
+    channels: optionalInteger(record.channels),
+    streamLive: optionalBoolean(record.streamLive),
+    corked: optionalBoolean(record.corked),
+    processLatencyQuantum: optionalNumber(record.processLatencyQuantum),
+    processLatencyRate: optionalInteger(record.processLatencyRate),
+    processLatencyNs: optionalInteger(record.processLatencyNs),
     isStream: requiredBoolean(record.isStream, "audio.node.isStream"),
     isSink: requiredBoolean(record.isSink, "audio.node.isSink"),
     isSource: requiredBoolean(record.isSource, "audio.node.isSource"),
+  };
+}
+
+function decodeDesktopAudioRuntimeNode(value: unknown): DesktopAudioRuntimeNode {
+  const record = asRecord(value);
+  if (!record) throw new DesktopAgentProtocolError("INVALID_AUDIO", "Desktop audio runtime node must be an object.");
+  return {
+    id: requiredInteger(record.id, "audioRuntime.node.id"),
+    stateCode: requiredString(record.stateCode, "audioRuntime.node.stateCode"),
+    running: requiredBoolean(record.running, "audioRuntime.node.running"),
+    quantum: requiredInteger(record.quantum, "audioRuntime.node.quantum"),
+    rate: requiredInteger(record.rate, "audioRuntime.node.rate"),
+    waitUsec: optionalNumber(record.waitUsec),
+    busyUsec: optionalNumber(record.busyUsec),
+    waitRatio: optionalNumber(record.waitRatio),
+    busyRatio: optionalNumber(record.busyRatio),
+    errors: requiredInteger(record.errors, "audioRuntime.node.errors"),
+    audioFormat: optionalString(record.audioFormat),
+    channels: optionalInteger(record.channels),
+    formatRate: optionalInteger(record.formatRate),
+    name: requiredString(record.name, "audioRuntime.node.name"),
   };
 }
 
@@ -1799,6 +1886,7 @@ function isDesktopAgentMethod(value: string): value is DesktopAgentMethod {
     || value === "processes.list"
     || value === "events.recent"
     || value === "audio.graph"
+    || value === "audio.runtime"
     || value === "devices.list"
     || value === "network.snapshot"
     || value === "virtual-desktops.snapshot"
@@ -1950,6 +2038,18 @@ function stringArray(value: unknown, field: string): string[] {
     throw new DesktopAgentProtocolError("INVALID_RESPONSE", `Invalid ${field}.`);
   }
   return value as string[];
+}
+
+function optionalStringArray(value: unknown, field: string): string[] | undefined {
+  return value === undefined ? undefined : stringArray(value, field);
+}
+
+function optionalNumberArray(value: unknown, field: string): number[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "number" || !Number.isFinite(item))) {
+    throw new DesktopAgentProtocolError("INVALID_RESPONSE", `Invalid ${field}.`);
+  }
+  return value as number[];
 }
 
 function integerArray(value: unknown, field: string): number[] {

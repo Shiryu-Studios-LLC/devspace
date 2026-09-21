@@ -702,6 +702,10 @@ function changedAudioStreamFields(previous: DesktopAudioNode, next: DesktopAudio
   if (previous.targetObject !== next.targetObject) changed.push("target route");
   if (previous.sampleRate !== next.sampleRate) changed.push("sample rate");
   if (previous.latency !== next.latency) changed.push("latency");
+  if (previous.volume !== next.volume || JSON.stringify(previous.channelVolumes) !== JSON.stringify(next.channelVolumes) || JSON.stringify(previous.softVolumes) !== JSON.stringify(next.softVolumes)) changed.push("volume");
+  if (previous.mute !== next.mute || previous.softMute !== next.softMute || previous.monitorMute !== next.monitorMute) changed.push("mute state");
+  if (previous.audioFormat !== next.audioFormat || previous.channels !== next.channels || JSON.stringify(previous.channelMap) !== JSON.stringify(next.channelMap)) changed.push("format");
+  if (previous.streamLive !== next.streamLive || previous.corked !== next.corked) changed.push("stream activity");
   if (previous.mediaClass !== next.mediaClass) changed.push("media class");
   if (audioNodeApplicationId(previous) !== audioNodeApplicationId(next)) changed.push("application identity");
   return changed;

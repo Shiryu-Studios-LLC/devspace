@@ -13,6 +13,7 @@ import type {
   DesktopActivityTimeline,
   DesktopAgentStatus,
   DesktopAudioGraph,
+  DesktopAudioRuntimeSnapshot,
   DesktopCapabilityStatus,
   DesktopPermissionStatus,
   DesktopDeviceInfo,
@@ -840,6 +841,21 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
             targetObject: z.string().optional(),
             sampleRate: z.number().int().optional(),
             latency: z.string().optional(),
+            volume: z.number().optional(),
+            mute: z.boolean().optional(),
+            channelVolumes: z.array(z.number()).optional(),
+            channelMap: z.array(z.string()).optional(),
+            softMute: z.boolean().optional(),
+            softVolumes: z.array(z.number()).optional(),
+            monitorMute: z.boolean().optional(),
+            monitorVolumes: z.array(z.number()).optional(),
+            audioFormat: z.string().optional(),
+            channels: z.number().int().optional(),
+            streamLive: z.boolean().optional(),
+            corked: z.boolean().optional(),
+            processLatencyQuantum: z.number().optional(),
+            processLatencyRate: z.number().int().optional(),
+            processLatencyNs: z.number().int().optional(),
             isStream: z.boolean(),
             isSink: z.boolean(),
             isSource: z.boolean(),
@@ -876,6 +892,55 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
         return {
           content: [{ type: "text" as const, text: result }],
           structuredContent: { status: "ready" as const, result, graph },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "desktop_audio_runtime",
+    {
+      title: "Desktop Audio Runtime",
+      description:
+        "Sample PipeWire runtime scheduling telemetry on demand using pw-top. Returns node quantum/rate, wait/busy timing, error/xrun counts, and active audio format without capturing audio samples or changing routes/devices.",
+      inputSchema: {},
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        runtime: z.object({
+          generatedAt: z.string(),
+          samplingIterations: z.number().int(),
+          nodes: z.array(z.object({
+            id: z.number().int(),
+            stateCode: z.string(),
+            running: z.boolean(),
+            quantum: z.number().int(),
+            rate: z.number().int(),
+            waitUsec: z.number().optional(),
+            busyUsec: z.number().optional(),
+            waitRatio: z.number().optional(),
+            busyRatio: z.number().optional(),
+            errors: z.number().int(),
+            audioFormat: z.string().optional(),
+            channels: z.number().int().optional(),
+            formatRate: z.number().int().optional(),
+            name: z.string(),
+          })),
+        }).optional(),
+      },
+      _meta: {},
+      annotations: readAnnotations,
+    },
+    async () => {
+      try {
+        const runtime = await client.audioRuntime();
+        const result = formatAudioRuntimeSummary(runtime);
+        return {
+          content: [{ type: "text" as const, text: result }],
+          structuredContent: { status: "ready" as const, result, runtime },
         };
       } catch (error) {
         return clientErrorResponse(error);
@@ -1593,6 +1658,13 @@ function formatAudioSummary(graph: DesktopAudioGraph): string {
   const sinks = graph.nodes.filter((node) => node.isSink);
   const sources = graph.nodes.filter((node) => node.isSource);
   return `PipeWire audio graph: ${graph.nodes.length} audio node(s), ${streams.length} stream(s), ${sinks.length} sink(s), ${sources.length} source(s), ${graph.links.length} route link(s).`;
+}
+
+function formatAudioRuntimeSummary(runtime: DesktopAudioRuntimeSnapshot): string {
+  const running = runtime.nodes.filter((node) => node.running);
+  const withErrors = runtime.nodes.filter((node) => node.errors > 0);
+  const timed = runtime.nodes.filter((node) => node.waitUsec !== undefined || node.busyUsec !== undefined);
+  return `PipeWire runtime: ${runtime.nodes.length} node(s), ${running.length} running, ${timed.length} with timing samples, ${withErrors.length} with nonzero error/xrun counts.`;
 }
 
 function formatActivitySummary(activity: DesktopActivityTimeline): string {

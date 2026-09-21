@@ -10,7 +10,9 @@ import {
 } from "./desktop-permissions.js";
 import {
   getPipeWireAudioGraph,
+  getPipeWireAudioRuntime,
   pipeWireAudioAwarenessAvailable,
+  pipeWireAudioRuntimeAvailable,
 } from "./desktop-audio-pipewire.js";
 import {
   linuxDeviceAwarenessAvailable,
@@ -58,6 +60,7 @@ import {
   type DesktopAgentRequest,
   type DesktopAgentStatus,
   type DesktopAudioGraph,
+  type DesktopAudioRuntimeSnapshot,
   type DesktopCapabilityStatus,
   type DesktopDeviceInfo,
   type DesktopDisplayInfo,
@@ -141,6 +144,7 @@ export interface DesktopAgentDaemonOptions {
   accessibilityAction?: (request: DesktopAccessibilityActionRequest) => Promise<DesktopAccessibilityActionResult>;
   input?: (request: DesktopInputRequest) => Promise<DesktopInputResult>;
   audioGraph?: () => Promise<DesktopAudioGraph>;
+  audioRuntime?: () => Promise<DesktopAudioRuntimeSnapshot>;
   devices?: () => Promise<DesktopDeviceInfo[]>;
   networkSnapshot?: () => Promise<DesktopNetworkSnapshot>;
   virtualDesktops?: () => Promise<DesktopVirtualDesktopSnapshot>;
@@ -173,6 +177,7 @@ export class DesktopAgentDaemon {
   private readonly accessibilityActionProvider: (request: DesktopAccessibilityActionRequest) => Promise<DesktopAccessibilityActionResult>;
   private readonly inputProvider: (request: DesktopInputRequest) => Promise<DesktopInputResult>;
   private readonly audioGraphProvider: () => Promise<DesktopAudioGraph>;
+  private readonly audioRuntimeProvider: () => Promise<DesktopAudioRuntimeSnapshot>;
   private readonly devicesProvider: () => Promise<DesktopDeviceInfo[]>;
   private readonly networkSnapshotProvider: () => Promise<DesktopNetworkSnapshot>;
   private readonly virtualDesktopsProvider: () => Promise<DesktopVirtualDesktopSnapshot>;
@@ -212,6 +217,7 @@ export class DesktopAgentDaemon {
     this.accessibilityActionProvider = options.accessibilityAction ?? createAtspiAccessibilityActionProvider();
     this.inputProvider = options.input ?? createYdotoolInputProvider({ now: options.now });
     this.audioGraphProvider = options.audioGraph ?? getPipeWireAudioGraph;
+    this.audioRuntimeProvider = options.audioRuntime ?? getPipeWireAudioRuntime;
     this.devicesProvider = options.devices ?? listLinuxDevices;
     this.networkSnapshotProvider = options.networkSnapshot ?? getLinuxNetworkSnapshot;
     this.virtualDesktopsProvider = options.virtualDesktops ?? getKdeVirtualDesktopSnapshot;
@@ -592,6 +598,16 @@ export class DesktopAgentDaemon {
         }
         return this.audioGraphProvider();
       }
+      case "audio.runtime": {
+        const runtimeCapability = this.capabilitiesProvider().find((capability) => capability.id === "audio-runtime");
+        if (runtimeCapability?.state !== "ready") {
+          throw new DesktopAgentProtocolError(
+            "DESKTOP_AUDIO_RUNTIME_UNAVAILABLE",
+            runtimeCapability?.detail ?? "PipeWire runtime telemetry is unavailable.",
+          );
+        }
+        return this.audioRuntimeProvider();
+      }
       case "devices.list": {
         const devicesCapability = this.capabilitiesProvider().find((capability) => capability.id === "devices");
         if (devicesCapability?.state !== "ready") {
@@ -765,6 +781,7 @@ export function defaultDesktopCapabilities(
   const accessibilityReady = atspiAccessibilityAvailable();
   const inputReady = ydotoolInputAvailable();
   const audioReady = pipeWireAudioAwarenessAvailable();
+  const audioRuntimeReady = pipeWireAudioRuntimeAvailable();
   const devicesReady = linuxDeviceAwarenessAvailable();
   const networkReady = linuxNetworkAwarenessAvailable();
   const logsReady = linuxLogAwarenessAvailable();
@@ -817,7 +834,13 @@ export function defaultDesktopCapabilities(
       "Dismiss observed notifications and invoke only action IDs advertised by those notifications through Plasma D-Bus",
       "Plasma notification action D-Bus service is unavailable"),
     permissionAwareCapability(permissions, "audio", audioReady,
-      "Read-only PipeWire audio nodes, ports, and routing links", "PipeWire user-session graph is unavailable"),
+      "Read-only PipeWire audio nodes, ports, routing links, volume/mute metadata, current format, and process-latency metadata",
+      "PipeWire user-session graph is unavailable"),
+    !desktopPermissionGranted(permissions, "audio")
+      ? disabledCapability("audio-runtime")
+      : audioRuntimeReady
+        ? { id: "audio-runtime", state: "ready", detail: "On-demand pw-top scheduling telemetry with quantum, rate, wait/busy timing, format, channels, and xrun/error counts; no audio samples are captured" }
+        : { id: "audio-runtime", state: "unavailable", detail: "pw-top runtime telemetry is unavailable" },
     permissionAwareCapability(permissions, "devices", devicesReady,
       "Read-only Linux USB, PCI, block-storage, and Bluetooth inventory without serial numbers or Bluetooth addresses",
       "Linux hardware inventory sources are unavailable"),
@@ -857,7 +880,8 @@ function permissionForDesktopMethod(method: DesktopAgentRequest["method"]): Desk
     case "accessibility.action": return "accessibility";
     case "input.perform": return "input";
     case "events.recent": return "events";
-    case "audio.graph": return "audio";
+    case "audio.graph":
+    case "audio.runtime": return "audio";
     case "devices.list": return "devices";
     case "network.snapshot": return "network";
     case "virtual-desktops.snapshot": return "virtual-desktops";

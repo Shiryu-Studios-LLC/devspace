@@ -172,6 +172,47 @@ test("desktop activity monitor records PipeWire stream and route changes", async
   ]);
 });
 
+test("desktop activity monitor records meaningful PipeWire control changes but ignores timing-only churn", async () => {
+  let stream = {
+    ...audioStream(200, "WEBRTC VoiceEngine", 1800836, "running", "shiryu.input.1.clean"),
+    volume: 0.8,
+    mute: false,
+    channelVolumes: [0.8, 0.8],
+    channelMap: ["FL", "FR"],
+    audioFormat: "F32LE",
+    channels: 2,
+    processLatencyNs: 1_000_000,
+  };
+  let audio = audioGraph([stream], []);
+  const monitor = new DesktopActivityMonitor({
+    windows: async () => [],
+    processes: async () => [],
+    displays: async () => [],
+    audio: async () => audio,
+  });
+
+  await monitor.sample();
+  stream = { ...stream, processLatencyNs: 1_500_000 };
+  audio = audioGraph([stream], []);
+  await monitor.sample();
+  assert.deepEqual(monitor.recent(), [], "process-latency telemetry should not create activity events");
+
+  stream = {
+    ...stream,
+    volume: 0.5,
+    mute: true,
+    channelVolumes: [0.5, 0.5],
+    audioFormat: "S16LE",
+  };
+  audio = audioGraph([stream], []);
+  await monitor.sample();
+  assert.equal(monitor.recent().length, 1);
+  assert.equal(monitor.recent()[0]?.type, "audio.stream.changed");
+  assert.match(monitor.recent()[0]?.summary ?? "", /volume/);
+  assert.match(monitor.recent()[0]?.summary ?? "", /mute state/);
+  assert.match(monitor.recent()[0]?.summary ?? "", /format/);
+});
+
 test("desktop activity monitor records network interface, route, DNS, listener, and tunnel changes", async () => {
   let network = networkSnapshot({
     listenerPort: 7676,

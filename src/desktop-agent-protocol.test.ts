@@ -10,6 +10,7 @@ import {
   decodeDesktopAgentStatus,
   decodeDesktopPermissionStatuses,
   decodeDesktopAudioGraph,
+  decodeDesktopAudioRuntime,
   decodeDesktopDeviceList,
   decodeDesktopDisplayList,
   decodeDesktopNetworkSnapshot,
@@ -366,15 +367,21 @@ test("desktop agent accepts guarded notification control requests", () => {
   );
 });
 
-test("desktop agent accepts the read-only audio graph method", () => {
-  const request: DesktopAgentRequest = {
+test("desktop agent accepts the read-only audio graph/runtime methods", () => {
+  const graph: DesktopAgentRequest = {
     requestId: "request-audio",
     protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
     authToken: "a".repeat(64),
     method: "audio.graph",
     params: {},
   };
-  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(graph))), graph);
+  const runtime: DesktopAgentRequest = {
+    ...graph,
+    requestId: "request-audio-runtime",
+    method: "audio.runtime",
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(runtime))), runtime);
 });
 
 test("desktop agent protocol rejects unknown methods", () => {
@@ -656,6 +663,22 @@ test("desktop agent decodes a structured PipeWire audio graph", () => {
       pid: 1800836,
       targetObject: "shiryu.input.1.clean",
       sampleRate: 48000,
+      latency: "256/48000",
+      volume: 0.75,
+      mute: false,
+      channelVolumes: [0.7, 0.8],
+      channelMap: ["FL", "FR"],
+      softMute: false,
+      softVolumes: [1, 1],
+      monitorMute: false,
+      monitorVolumes: [1, 1],
+      audioFormat: "F32LE",
+      channels: 2,
+      streamLive: true,
+      corked: false,
+      processLatencyQuantum: 64,
+      processLatencyRate: 48000,
+      processLatencyNs: 1333333,
       isStream: true,
       isSink: false,
       isSource: false,
@@ -675,8 +698,42 @@ test("desktop agent decodes a structured PipeWire audio graph", () => {
     }],
   });
   assert.equal(graph.nodes[1]?.applicationBinary, "Discord");
+  assert.equal(graph.nodes[1]?.volume, 0.75);
+  assert.deepEqual(graph.nodes[1]?.channelVolumes, [0.7, 0.8]);
+  assert.deepEqual(graph.nodes[1]?.channelMap, ["FL", "FR"]);
+  assert.equal(graph.nodes[1]?.audioFormat, "F32LE");
+  assert.equal(graph.nodes[1]?.channels, 2);
+  assert.equal(graph.nodes[1]?.processLatencyNs, 1333333);
   assert.equal(graph.links[0]?.outputNodeName, "Shiryu Microphone 1");
   assert.equal(graph.links[0]?.inputNodeName, "WEBRTC VoiceEngine");
+});
+
+test("desktop agent decodes a structured PipeWire runtime snapshot", () => {
+  const runtime = decodeDesktopAudioRuntime({
+    generatedAt: "2026-09-20T02:00:01.000Z",
+    samplingIterations: 2,
+    nodes: [{
+      id: 196,
+      stateCode: "R",
+      running: true,
+      quantum: 300,
+      rate: 48000,
+      waitUsec: 19.5,
+      busyUsec: 8.3,
+      waitRatio: 0.01,
+      busyRatio: 0,
+      errors: 24,
+      audioFormat: "F32LE",
+      channels: 2,
+      formatRate: 48000,
+      name: "plasmashell",
+    }],
+  });
+  assert.equal(runtime.samplingIterations, 2);
+  assert.equal(runtime.nodes[0]?.running, true);
+  assert.equal(runtime.nodes[0]?.errors, 24);
+  assert.equal(runtime.nodes[0]?.audioFormat, "F32LE");
+  assert.equal(runtime.nodes[0]?.waitUsec, 19.5);
 });
 
 test("desktop agent decodes a structured device list without raw serial or Bluetooth address fields", () => {
