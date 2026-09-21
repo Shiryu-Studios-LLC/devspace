@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { normalizePipeWireAudioGraph, parsePipeWireTop } from "./desktop-audio-pipewire.js";
+import { normalizePipeWireAudioGraph, parsePipeWireMeterPcm, parsePipeWireTop } from "./desktop-audio-pipewire.js";
 
 test("PipeWire audio graph includes non-invasive runtime control metadata", () => {
   const graph = normalizePipeWireAudioGraph([
@@ -73,6 +73,35 @@ test("PipeWire audio graph includes non-invasive runtime control metadata", () =
     isSink: false,
     isSource: false,
   });
+});
+
+test("PipeWire audio meter reduces bounded PCM samples to peak/RMS statistics without retaining samples", () => {
+  const samples = [0.5, 0.25, 1, -0.25, -0.5, 0.25, 0, -0.25];
+  const pcm = Buffer.alloc(samples.length * 4);
+  samples.forEach((sample, index) => pcm.writeFloatLE(sample, index * 4));
+
+  const meter = parsePipeWireMeterPcm(pcm, {
+    nodeId: 42,
+    durationMs: 250,
+    sampleRate: 48000,
+    channels: 2,
+    now: () => Date.parse("2026-09-20T12:00:00.000Z"),
+  });
+
+  assert.equal(meter.nodeId, 42);
+  assert.equal(meter.sampledAt, "2026-09-20T12:00:00.000Z");
+  assert.equal(meter.sampleCount, 4);
+  assert.equal(meter.levels.length, 2);
+  assert.equal(meter.levels[0]?.peak, 1);
+  assert.ok(Math.abs((meter.levels[0]?.rms ?? 0) - Math.sqrt(0.375)) < 1e-6);
+  assert.equal(meter.levels[0]?.peakDbfs, 0);
+  assert.equal(meter.levels[1]?.peak, 0.25);
+  assert.ok(Math.abs((meter.levels[1]?.rmsDbfs ?? 0) - (-12.041199826559248)) < 1e-6);
+  assert.equal("samples" in meter, false, "meter output must never retain raw audio samples");
+  assert.throws(
+    () => parsePipeWireMeterPcm(Buffer.alloc(4), { nodeId: 42, durationMs: 250, sampleRate: 48000, channels: 2 }),
+    /no usable samples/,
+  );
 });
 
 test("PipeWire runtime parser uses the last pw-top iteration and normalizes timing units", () => {

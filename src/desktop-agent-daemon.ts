@@ -15,8 +15,10 @@ import {
 import {
   getPipeWireAudioGraph,
   getPipeWireAudioRuntime,
+  getPipeWireAudioMeter,
   pipeWireAudioAwarenessAvailable,
   pipeWireAudioRuntimeAvailable,
+  pipeWireAudioMeterAvailable,
 } from "./desktop-audio-pipewire.js";
 import {
   linuxDeviceAwarenessAvailable,
@@ -65,6 +67,8 @@ import {
   type DesktopAgentStatus,
   type DesktopAudioGraph,
   type DesktopAudioRuntimeSnapshot,
+  type DesktopAudioMeterRequest,
+  type DesktopAudioMeterSnapshot,
   type DesktopBrowserSessionSnapshot,
   type DesktopCapabilityStatus,
   type DesktopDeviceInfo,
@@ -161,6 +165,7 @@ export interface DesktopAgentDaemonOptions {
   input?: (request: DesktopInputRequest) => Promise<DesktopInputResult>;
   audioGraph?: () => Promise<DesktopAudioGraph>;
   audioRuntime?: () => Promise<DesktopAudioRuntimeSnapshot>;
+  audioMeter?: (request: DesktopAudioMeterRequest) => Promise<DesktopAudioMeterSnapshot>;
   devices?: () => Promise<DesktopDeviceInfo[]>;
   networkSnapshot?: () => Promise<DesktopNetworkSnapshot>;
   virtualDesktops?: () => Promise<DesktopVirtualDesktopSnapshot>;
@@ -197,6 +202,7 @@ export class DesktopAgentDaemon {
   private readonly inputProvider: (request: DesktopInputRequest) => Promise<DesktopInputResult>;
   private readonly audioGraphProvider: () => Promise<DesktopAudioGraph>;
   private readonly audioRuntimeProvider: () => Promise<DesktopAudioRuntimeSnapshot>;
+  private readonly audioMeterProvider: (request: DesktopAudioMeterRequest) => Promise<DesktopAudioMeterSnapshot>;
   private readonly devicesProvider: () => Promise<DesktopDeviceInfo[]>;
   private readonly networkSnapshotProvider: () => Promise<DesktopNetworkSnapshot>;
   private readonly virtualDesktopsProvider: () => Promise<DesktopVirtualDesktopSnapshot>;
@@ -243,6 +249,7 @@ export class DesktopAgentDaemon {
     this.inputProvider = options.input ?? createYdotoolInputProvider({ now: options.now });
     this.audioGraphProvider = options.audioGraph ?? getPipeWireAudioGraph;
     this.audioRuntimeProvider = options.audioRuntime ?? getPipeWireAudioRuntime;
+    this.audioMeterProvider = options.audioMeter ?? getPipeWireAudioMeter;
     this.devicesProvider = options.devices ?? listLinuxDevices;
     this.networkSnapshotProvider = options.networkSnapshot ?? getLinuxNetworkSnapshot;
     this.virtualDesktopsProvider = options.virtualDesktops ?? getKdeVirtualDesktopSnapshot;
@@ -635,6 +642,16 @@ export class DesktopAgentDaemon {
         }
         return this.audioRuntimeProvider();
       }
+      case "audio.meter": {
+        const meterCapability = this.capabilitiesProvider().find((capability) => capability.id === "audio-meter");
+        if (meterCapability?.state !== "ready") {
+          throw new DesktopAgentProtocolError(
+            "DESKTOP_AUDIO_METER_UNAVAILABLE",
+            meterCapability?.detail ?? "PipeWire audio metering is unavailable.",
+          );
+        }
+        return this.audioMeterProvider(request.params);
+      }
       case "devices.list": {
         const devicesCapability = this.capabilitiesProvider().find((capability) => capability.id === "devices");
         if (devicesCapability?.state !== "ready") {
@@ -843,6 +860,7 @@ export function defaultDesktopCapabilities(
   const inputReady = ydotoolInputAvailable();
   const audioReady = pipeWireAudioAwarenessAvailable();
   const audioRuntimeReady = pipeWireAudioRuntimeAvailable();
+  const audioMeterReady = pipeWireAudioMeterAvailable();
   const devicesReady = linuxDeviceAwarenessAvailable();
   const networkReady = linuxNetworkAwarenessAvailable();
   const logsReady = linuxLogAwarenessAvailable();
@@ -904,6 +922,9 @@ export function defaultDesktopCapabilities(
       : audioRuntimeReady
         ? { id: "audio-runtime", state: "ready", detail: "On-demand pw-top scheduling telemetry with quantum, rate, wait/busy timing, format, channels, and xrun/error counts; no audio samples are captured" }
         : { id: "audio-runtime", state: "unavailable", detail: "pw-top runtime telemetry is unavailable" },
+    permissionAwareCapability(permissions, "audio-meter", audioMeterReady,
+      "Opt-in bounded PipeWire peak/RMS metering; samples are consumed only for the requested short interval and discarded after level calculation",
+      "PipeWire pw-cat audio metering is unavailable"),
     permissionAwareCapability(permissions, "devices", devicesReady,
       "Read-only Linux USB, PCI, block-storage, and Bluetooth inventory without serial numbers or Bluetooth addresses",
       "Linux hardware inventory sources are unavailable"),
@@ -965,6 +986,7 @@ function permissionForDesktopMethod(method: DesktopAgentRequest["method"]): Desk
     case "events.recent": return "events";
     case "audio.graph":
     case "audio.runtime": return "audio";
+    case "audio.meter": return "audio-meter";
     case "devices.list": return "devices";
     case "network.snapshot": return "network";
     case "virtual-desktops.snapshot": return "virtual-desktops";

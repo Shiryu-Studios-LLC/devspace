@@ -388,6 +388,31 @@ export interface DesktopAudioRuntimeSnapshot {
   nodes: DesktopAudioRuntimeNode[];
 }
 
+export interface DesktopAudioMeterRequest {
+  nodeId: number;
+  durationMs?: number;
+  channels?: number;
+  captureSink?: boolean;
+}
+
+export interface DesktopAudioMeterChannel {
+  channel: number;
+  peak: number;
+  rms: number;
+  peakDbfs: number;
+  rmsDbfs: number;
+}
+
+export interface DesktopAudioMeterSnapshot {
+  nodeId: number;
+  sampledAt: string;
+  durationMs: number;
+  sampleRate: number;
+  channels: number;
+  sampleCount: number;
+  levels: DesktopAudioMeterChannel[];
+}
+
 export type DesktopDeviceSubsystem = "usb" | "pci" | "block" | "bluetooth";
 
 export interface DesktopDeviceInfo {
@@ -650,6 +675,7 @@ export type DesktopAgentMethod =
   | "events.recent"
   | "audio.graph"
   | "audio.runtime"
+  | "audio.meter"
   | "devices.list"
   | "network.snapshot"
   | "virtual-desktops.snapshot"
@@ -677,12 +703,16 @@ type DesktopAgentRequestBase = {
   authToken: string;
 };
 
-type DesktopAgentNoParamsMethod = Exclude<DesktopAgentMethod, "logs.read" | "trace.correlate" | "apps.shiryugen.trace" | "screen.capture" | "clipboard.write" | "accessibility.snapshot" | "accessibility.action" | "input.perform" | "notifications.perform" | "filesystem.watch.start" | "filesystem.watch.stop">;
+type DesktopAgentNoParamsMethod = Exclude<DesktopAgentMethod, "audio.meter" | "logs.read" | "trace.correlate" | "apps.shiryugen.trace" | "screen.capture" | "clipboard.write" | "accessibility.snapshot" | "accessibility.action" | "input.perform" | "notifications.perform" | "filesystem.watch.start" | "filesystem.watch.stop">;
 
 export type DesktopAgentRequest = DesktopAgentRequestBase & (
   | {
       method: DesktopAgentNoParamsMethod;
       params: Record<string, never>;
+    }
+  | {
+      method: "audio.meter";
+      params: DesktopAudioMeterRequest;
     }
   | {
       method: "logs.read";
@@ -789,6 +819,37 @@ export function decodeDesktopAgentRequest(value: unknown): DesktopAgentRequest {
   const params = asRecord(record?.params);
   if (!params) {
     throw new DesktopAgentProtocolError("INVALID_PARAMS", `${method} requires an object params field.`);
+  }
+  if (method === "audio.meter") {
+    const allowed = new Set(["nodeId", "durationMs", "channels", "captureSink"]);
+    if (Object.keys(params).some((key) => !allowed.has(key))) {
+      throw new DesktopAgentProtocolError("INVALID_PARAMS", "audio.meter received unknown parameters.");
+    }
+    const nodeId = requiredInteger(params.nodeId, "audioMeter.nodeId");
+    const durationMs = params.durationMs === undefined ? undefined : requiredInteger(params.durationMs, "audioMeter.durationMs");
+    const channels = params.channels === undefined ? undefined : requiredInteger(params.channels, "audioMeter.channels");
+    const captureSink = params.captureSink === undefined ? undefined : requiredRequestBoolean(params.captureSink, "audioMeter.captureSink");
+    if (nodeId < 0) {
+      throw new DesktopAgentProtocolError("INVALID_PARAMS", "audioMeter.nodeId must be non-negative.");
+    }
+    if (durationMs !== undefined && (durationMs < 50 || durationMs > 1000)) {
+      throw new DesktopAgentProtocolError("INVALID_PARAMS", "audioMeter.durationMs must be between 50 and 1000.");
+    }
+    if (channels !== undefined && (channels < 1 || channels > 8)) {
+      throw new DesktopAgentProtocolError("INVALID_PARAMS", "audioMeter.channels must be between 1 and 8.");
+    }
+    return {
+      requestId,
+      protocolVersion,
+      authToken,
+      method,
+      params: {
+        nodeId,
+        ...(durationMs === undefined ? {} : { durationMs }),
+        ...(channels === undefined ? {} : { channels }),
+        ...(captureSink === undefined ? {} : { captureSink }),
+      },
+    };
   }
   if (method === "logs.read") {
     const sourceId = requiredString(params.sourceId, "logs.sourceId");
@@ -1411,6 +1472,37 @@ export function decodeDesktopAudioRuntime(value: unknown): DesktopAudioRuntimeSn
     generatedAt: requiredString(record.generatedAt, "audioRuntime.generatedAt"),
     samplingIterations: requiredInteger(record.samplingIterations, "audioRuntime.samplingIterations"),
     nodes: record.nodes.map(decodeDesktopAudioRuntimeNode),
+  };
+}
+
+export function decodeDesktopAudioMeter(value: unknown): DesktopAudioMeterSnapshot {
+  const record = asRecord(value);
+  if (!record || !Array.isArray(record.levels)) {
+    throw new DesktopAgentProtocolError("INVALID_AUDIO", "Desktop agent returned an invalid audio meter snapshot.");
+  }
+  const channels = requiredInteger(record.channels, "audioMeter.channels");
+  const levels = record.levels.map((value) => {
+    const level = asRecord(value);
+    if (!level) throw new DesktopAgentProtocolError("INVALID_AUDIO", "Audio meter channel must be an object.");
+    return {
+      channel: requiredInteger(level.channel, "audioMeter.level.channel"),
+      peak: requiredNumber(level.peak, "audioMeter.level.peak"),
+      rms: requiredNumber(level.rms, "audioMeter.level.rms"),
+      peakDbfs: requiredNumber(level.peakDbfs, "audioMeter.level.peakDbfs"),
+      rmsDbfs: requiredNumber(level.rmsDbfs, "audioMeter.level.rmsDbfs"),
+    };
+  });
+  if (channels < 1 || levels.length !== channels) {
+    throw new DesktopAgentProtocolError("INVALID_AUDIO", "Audio meter channel count is inconsistent.");
+  }
+  return {
+    nodeId: requiredInteger(record.nodeId, "audioMeter.nodeId"),
+    sampledAt: requiredString(record.sampledAt, "audioMeter.sampledAt"),
+    durationMs: requiredInteger(record.durationMs, "audioMeter.durationMs"),
+    sampleRate: requiredInteger(record.sampleRate, "audioMeter.sampleRate"),
+    channels,
+    sampleCount: requiredInteger(record.sampleCount, "audioMeter.sampleCount"),
+    levels,
   };
 }
 
@@ -2137,6 +2229,7 @@ function isDesktopAgentMethod(value: string): value is DesktopAgentMethod {
     || value === "events.recent"
     || value === "audio.graph"
     || value === "audio.runtime"
+    || value === "audio.meter"
     || value === "devices.list"
     || value === "network.snapshot"
     || value === "virtual-desktops.snapshot"

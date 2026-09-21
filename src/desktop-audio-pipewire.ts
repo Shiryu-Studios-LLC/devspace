@@ -8,14 +8,21 @@ import type {
   DesktopAudioPort,
   DesktopAudioRuntimeNode,
   DesktopAudioRuntimeSnapshot,
+  DesktopAudioMeterRequest,
+  DesktopAudioMeterSnapshot,
 } from "./desktop-agent-protocol.js";
 
 const execFileAsync = promisify(execFile);
 const PW_DUMP = "/usr/bin/pw-dump";
 const PW_TOP = "/usr/bin/pw-top";
+const PW_CAT = "/usr/bin/pw-cat";
 const DEFAULT_MAX_BUFFER = 32 * 1024 * 1024;
 const RUNTIME_SAMPLE_ITERATIONS = 2;
 const RUNTIME_TIMEOUT_MS = 3_000;
+const AUDIO_METER_SAMPLE_RATE = 48_000;
+const AUDIO_METER_DEFAULT_DURATION_MS = 250;
+const AUDIO_METER_DEFAULT_CHANNELS = 2;
+const AUDIO_METER_MAX_BUFFER = 4 * 1024 * 1024;
 
 interface PipeWireObject {
   id?: unknown;
@@ -37,6 +44,10 @@ export function pipeWireAudioRuntimeAvailable(): boolean {
   return pipeWireAudioAwarenessAvailable() && existsSync(PW_TOP);
 }
 
+export function pipeWireAudioMeterAvailable(): boolean {
+  return pipeWireAudioAwarenessAvailable() && existsSync(PW_CAT);
+}
+
 export async function getPipeWireAudioRuntime(): Promise<DesktopAudioRuntimeSnapshot> {
   if (!pipeWireAudioRuntimeAvailable()) {
     throw new Error("PipeWire runtime telemetry is unavailable in this desktop session.");
@@ -48,6 +59,54 @@ export async function getPipeWireAudioRuntime(): Promise<DesktopAudioRuntimeSnap
     env: process.env,
   });
   return parsePipeWireTop(stdout, RUNTIME_SAMPLE_ITERATIONS);
+}
+
+export async function getPipeWireAudioMeter(
+  request: DesktopAudioMeterRequest,
+): Promise<DesktopAudioMeterSnapshot> {
+  if (!pipeWireAudioMeterAvailable()) {
+    throw new Error("PipeWire audio metering is unavailable in this desktop session.");
+  }
+  const nodeId = boundedInteger(request.nodeId, 0, Number.MAX_SAFE_INTEGER, "Audio meter nodeId");
+  const durationMs = boundedInteger(
+    request.durationMs ?? AUDIO_METER_DEFAULT_DURATION_MS,
+    50,
+    1000,
+    "Audio meter durationMs",
+  );
+  const channels = boundedInteger(
+    request.channels ?? AUDIO_METER_DEFAULT_CHANNELS,
+    1,
+    8,
+    "Audio meter channels",
+  );
+  const sampleCount = Math.ceil(AUDIO_METER_SAMPLE_RATE * durationMs / 1000);
+  const args = [
+    "--record",
+    "--raw",
+    "--target", String(nodeId),
+    "--rate", String(AUDIO_METER_SAMPLE_RATE),
+    "--channels", String(channels),
+    "--format", "f32",
+    "--sample-count", String(sampleCount),
+  ];
+  if (request.captureSink === true) {
+    args.push("--properties", "stream.capture.sink=true");
+  }
+  args.push("-");
+
+  const { stdout } = await execFileAsync(PW_CAT, args, {
+    encoding: "buffer",
+    maxBuffer: AUDIO_METER_MAX_BUFFER,
+    timeout: durationMs + 2_000,
+    env: process.env,
+  });
+  return parsePipeWireMeterPcm(stdout, {
+    nodeId,
+    durationMs,
+    sampleRate: AUDIO_METER_SAMPLE_RATE,
+    channels,
+  });
 }
 
 export async function getPipeWireAudioGraph(): Promise<DesktopAudioGraph> {
@@ -197,6 +256,57 @@ function normalizeLink(
   };
 }
 
+export function parsePipeWireMeterPcm(
+  pcm: Buffer,
+  options: {
+    nodeId: number;
+    durationMs: number;
+    sampleRate: number;
+    channels: number;
+    now?: () => number;
+  },
+): DesktopAudioMeterSnapshot {
+  const channels = boundedInteger(options.channels, 1, 8, "Audio meter channels");
+  if (pcm.length < channels * 4) {
+    throw new Error("PipeWire audio meter returned no usable samples.");
+  }
+  const floatCount = Math.floor(pcm.length / 4);
+  const frameCount = Math.floor(floatCount / channels);
+  if (frameCount < 1) throw new Error("PipeWire audio meter returned no complete sample frames.");
+
+  const peaks = Array.from({ length: channels }, () => 0);
+  const sums = Array.from({ length: channels }, () => 0);
+  for (let frame = 0; frame < frameCount; frame += 1) {
+    for (let channel = 0; channel < channels; channel += 1) {
+      const offset = (frame * channels + channel) * 4;
+      const raw = pcm.readFloatLE(offset);
+      const sample = Number.isFinite(raw) ? raw : 0;
+      const absolute = Math.abs(sample);
+      if (absolute > peaks[channel]!) peaks[channel] = absolute;
+      sums[channel] = sums[channel]! + sample * sample;
+    }
+  }
+
+  return {
+    nodeId: options.nodeId,
+    sampledAt: new Date((options.now ?? Date.now)()).toISOString(),
+    durationMs: options.durationMs,
+    sampleRate: options.sampleRate,
+    channels,
+    sampleCount: frameCount,
+    levels: peaks.map((peak, channel) => {
+      const rms = Math.sqrt(sums[channel]! / frameCount);
+      return {
+        channel,
+        peak,
+        rms,
+        peakDbfs: amplitudeToDbfs(peak),
+        rmsDbfs: amplitudeToDbfs(rms),
+      };
+    }),
+  };
+}
+
 export function parsePipeWireTop(
   stdout: string,
   samplingIterations = RUNTIME_SAMPLE_ITERATIONS,
@@ -325,6 +435,17 @@ function numberValue(value: unknown): number | undefined {
 
 function numberArray(value: unknown): number[] | undefined {
   return Array.isArray(value) && value.every((item) => typeof item === "number" && Number.isFinite(item)) ? value : undefined;
+}
+
+function amplitudeToDbfs(amplitude: number): number {
+  return amplitude > 0 ? Math.max(-120, 20 * Math.log10(amplitude)) : -120;
+}
+
+function boundedInteger(value: number, min: number, max: number, label: string): number {
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new Error(`${label} must be an integer between ${min} and ${max}.`);
+  }
+  return value;
 }
 
 function booleanValue(value: unknown): boolean | undefined {

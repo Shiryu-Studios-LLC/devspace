@@ -94,8 +94,10 @@ test("desktop agent serves authenticated status and capability requests", async 
   assert.equal(capabilities.length, 12);
   assert.ok(capabilities.every((capability) => capability.state === "not_implemented"));
   const permissions = await client.permissions();
-  assert.equal(permissions.length, 19);
+  assert.equal(permissions.length, 20);
   assert.equal(permissions.find((permission) => permission.id === "windows")?.granted, true);
+  assert.equal(permissions.find((permission) => permission.id === "audio-meter")?.granted, false);
+  assert.equal(permissions.find((permission) => permission.id === "audio-meter")?.defaultGranted, false);
   assert.equal(permissions.find((permission) => permission.id === "screen")?.granted, true);
 
   const authToken = readDesktopAgentSecret(desktopAgentPaths(stateDir));
@@ -847,6 +849,51 @@ test("desktop agent blocks PipeWire runtime telemetry when audio permission is d
     error instanceof DesktopAgentClientError && error.code === "DESKTOP_PERMISSION_DENIED"
   ));
   assert.equal(calls, 0, "denied audio runtime requests must not reach pw-top provider");
+});
+
+test("desktop agent requires explicit audio-meter permission before sampling", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-audio-meter-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const permissions = defaultDesktopPermissionPolicy();
+  let calls = 0;
+  const expectedMeter = {
+    nodeId: 91,
+    sampledAt: "2026-09-20T02:00:01.500Z",
+    durationMs: 250,
+    sampleRate: 48000,
+    channels: 2,
+    sampleCount: 12000,
+    levels: [
+      { channel: 0, peak: 0.5, rms: 0.25, peakDbfs: -6.0206, rmsDbfs: -12.0412 },
+      { channel: 1, peak: 1, rms: 0.5, peakDbfs: 0, rmsDbfs: -6.0206 },
+    ],
+  };
+  const daemon = new DesktopAgentDaemon({
+    stateDir,
+    permissions,
+    capabilities: () => [{ id: "audio-meter", state: "ready" }],
+    audioMeter: async (request) => {
+      calls += 1;
+      assert.deepEqual(request, { nodeId: 91, durationMs: 250, channels: 2 });
+      return expectedMeter;
+    },
+  });
+  t.after(() => daemon.close());
+  await daemon.start();
+  const client = new DesktopAgentClient({
+    stateDir,
+    spawnDaemon: () => assert.fail("existing daemon should not be respawned"),
+  });
+
+  await assert.rejects(() => client.audioMeter({ nodeId: 91, durationMs: 250, channels: 2 }), (error: unknown) => (
+    error instanceof DesktopAgentClientError && error.code === "DESKTOP_PERMISSION_DENIED"
+  ));
+  assert.equal(calls, 0, "default-denied audio meter must not consume samples");
+
+  const enabled = { ...permissions, "audio-meter": true };
+  daemon.updatePermissions(enabled);
+  assert.deepEqual(await client.audioMeter({ nodeId: 91, durationMs: 250, channels: 2 }), expectedMeter);
+  assert.equal(calls, 1);
 });
 
 test("desktop agent serves a structured read-only device inventory", async (t) => {

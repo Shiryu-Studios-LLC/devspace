@@ -32,6 +32,7 @@ assert.equal(loadConfig(baseEnv).desktopPermissions.notifications, true);
 assert.equal(loadConfig(baseEnv).desktopPermissions.screen, true);
 assert.equal(loadConfig(baseEnv).desktopPermissions.input, true);
 assert.equal(loadConfig(baseEnv).desktopPermissions["clipboard-read"], true);
+assert.equal(loadConfig(baseEnv).desktopPermissions["audio-meter"], false);
 assert.equal(loadConfig(baseEnv).browserCdpUrl, undefined);
 assert.equal(
   loadConfig({ ...baseEnv, DEVSPACE_BROWSER_CDP_URL: "http://127.0.0.1:9222" }).browserCdpUrl,
@@ -208,6 +209,7 @@ assert.equal(fileConfig.desktopPermissions.windows, false);
 assert.equal(fileConfig.desktopPermissions.notifications, false);
 assert.equal(fileConfig.desktopPermissions.screen, true);
 assert.equal(fileConfig.desktopPermissions.audio, true);
+assert.equal(fileConfig.desktopPermissions["audio-meter"], false);
 assert.deepEqual(fileConfig.allowedHosts, [
   "localhost",
   "127.0.0.1",

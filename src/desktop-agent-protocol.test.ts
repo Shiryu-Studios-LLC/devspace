@@ -11,6 +11,7 @@ import {
   decodeDesktopPermissionStatuses,
   decodeDesktopAudioGraph,
   decodeDesktopAudioRuntime,
+  decodeDesktopAudioMeter,
   decodeDesktopDeviceList,
   decodeDesktopDisplayList,
   decodeDesktopNetworkSnapshot,
@@ -399,7 +400,7 @@ test("desktop agent accepts guarded notification control requests", () => {
   );
 });
 
-test("desktop agent accepts the read-only audio graph/runtime methods", () => {
+test("desktop agent accepts the read-only audio graph/runtime methods and bounded opt-in metering", () => {
   const graph: DesktopAgentRequest = {
     requestId: "request-audio",
     protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
@@ -414,6 +415,21 @@ test("desktop agent accepts the read-only audio graph/runtime methods", () => {
     method: "audio.runtime",
   };
   assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(runtime))), runtime);
+  const meter: DesktopAgentRequest = {
+    ...graph,
+    requestId: "request-audio-meter",
+    method: "audio.meter",
+    params: { nodeId: 91, durationMs: 250, channels: 2, captureSink: true },
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(meter))), meter);
+  assert.throws(
+    () => decodeDesktopAgentRequest({ ...meter, params: { nodeId: 91, durationMs: 2000 } }),
+    /durationMs must be between 50 and 1000/,
+  );
+  assert.throws(
+    () => decodeDesktopAgentRequest({ ...meter, params: { nodeId: 91, channels: 9 } }),
+    /channels must be between 1 and 8/,
+  );
 });
 
 test("desktop agent protocol rejects unknown methods", () => {
@@ -738,6 +754,27 @@ test("desktop agent decodes a structured PipeWire audio graph", () => {
   assert.equal(graph.nodes[1]?.processLatencyNs, 1333333);
   assert.equal(graph.links[0]?.outputNodeName, "Shiryu Microphone 1");
   assert.equal(graph.links[0]?.inputNodeName, "WEBRTC VoiceEngine");
+});
+
+test("desktop agent decodes a structured PipeWire audio meter snapshot", () => {
+  const meter = decodeDesktopAudioMeter({
+    nodeId: 91,
+    sampledAt: "2026-09-20T02:00:01.500Z",
+    durationMs: 250,
+    sampleRate: 48000,
+    channels: 2,
+    sampleCount: 12000,
+    levels: [
+      { channel: 0, peak: 0.5, rms: 0.25, peakDbfs: -6.0206, rmsDbfs: -12.0412 },
+      { channel: 1, peak: 1, rms: 0.5, peakDbfs: 0, rmsDbfs: -6.0206 },
+    ],
+  });
+  assert.equal(meter.nodeId, 91);
+  assert.equal(meter.levels[1]?.peakDbfs, 0);
+  assert.throws(
+    () => decodeDesktopAudioMeter({ ...meter, channels: 3 }),
+    /channel count is inconsistent/,
+  );
 });
 
 test("desktop agent decodes a structured PipeWire runtime snapshot", () => {

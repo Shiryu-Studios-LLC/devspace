@@ -222,6 +222,7 @@ test("module status keeps core health separate from secondary modules", async (t
     "desktop_recent_activity",
     "desktop_audio_graph",
     "desktop_audio_runtime",
+    "desktop_audio_meter",
     "desktop_list_devices",
     "desktop_network_snapshot",
     "desktop_virtual_desktops",

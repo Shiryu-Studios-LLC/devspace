@@ -14,6 +14,7 @@ import type {
   DesktopAgentStatus,
   DesktopAudioGraph,
   DesktopAudioRuntimeSnapshot,
+  DesktopAudioMeterSnapshot,
   DesktopCapabilityStatus,
   DesktopPermissionStatus,
   DesktopDeviceInfo,
@@ -956,6 +957,60 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
 
   registerAppTool(
     server,
+    "desktop_audio_meter",
+    {
+      title: "Desktop Audio Meter",
+      description:
+        "Opt-in bounded PipeWire peak/RMS metering for one audio node. This consumes audio samples only for the requested short interval, returns level statistics only, and discards the samples immediately. The separate audio-meter desktop permission is disabled by default.",
+      inputSchema: {
+        nodeId: z.number().int().nonnegative().describe("PipeWire node ID from desktop_audio_graph."),
+        durationMs: z.number().int().min(50).max(1000).optional().describe("Sampling interval in milliseconds. Defaults to 250."),
+        channels: z.number().int().min(1).max(8).optional().describe("Requested channel count. Defaults to 2."),
+        captureSink: z.boolean().optional().describe("Set true when targeting an Audio/Sink node to meter its monitor stream."),
+      },
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        meter: z.object({
+          nodeId: z.number().int().nonnegative(),
+          sampledAt: z.string(),
+          durationMs: z.number().int().positive(),
+          sampleRate: z.number().int().positive(),
+          channels: z.number().int().positive(),
+          sampleCount: z.number().int().nonnegative(),
+          levels: z.array(z.object({
+            channel: z.number().int().nonnegative(),
+            peak: z.number().nonnegative(),
+            rms: z.number().nonnegative(),
+            peakDbfs: z.number(),
+            rmsDbfs: z.number(),
+          })),
+        }).optional(),
+      },
+      _meta: {},
+      annotations: readAnnotations,
+    },
+    async ({ nodeId, durationMs, channels, captureSink }) => {
+      try {
+        const meter = await client.audioMeter({
+          nodeId,
+          ...(durationMs === undefined ? {} : { durationMs }),
+          ...(channels === undefined ? {} : { channels }),
+          ...(captureSink === undefined ? {} : { captureSink }),
+        });
+        const result = formatAudioMeterSummary(meter);
+        return {
+          content: [{ type: "text" as const, text: result }],
+          structuredContent: { status: "ready" as const, result, meter },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
     "desktop_list_devices",
     {
       title: "List Desktop Devices",
@@ -1822,6 +1877,11 @@ function formatAudioRuntimeSummary(runtime: DesktopAudioRuntimeSnapshot): string
   const withErrors = runtime.nodes.filter((node) => node.errors > 0);
   const timed = runtime.nodes.filter((node) => node.waitUsec !== undefined || node.busyUsec !== undefined);
   return `PipeWire runtime: ${runtime.nodes.length} node(s), ${running.length} running, ${timed.length} with timing samples, ${withErrors.length} with nonzero error/xrun counts.`;
+}
+
+function formatAudioMeterSummary(meter: DesktopAudioMeterSnapshot): string {
+  const peaks = meter.levels.map((level) => `${level.channel}:${level.peakDbfs.toFixed(1)} dBFS`).join(", ");
+  return `PipeWire audio meter node ${meter.nodeId}: ${meter.channels} channel(s), ${meter.durationMs} ms, peak levels ${peaks}. Samples were discarded after measurement.`;
 }
 
 function formatActivitySummary(activity: DesktopActivityTimeline): string {

@@ -15,6 +15,7 @@ import {
   decodeDesktopAgentResponse,
   decodeDesktopAudioGraph,
   decodeDesktopAudioRuntime,
+  decodeDesktopAudioMeter,
   decodeDesktopAgentStatus,
   decodeDesktopPermissionStatuses,
   decodeDesktopDeviceList,
@@ -43,6 +44,8 @@ import {
   type DesktopAgentMethod,
   type DesktopAudioGraph,
   type DesktopAudioRuntimeSnapshot,
+  type DesktopAudioMeterRequest,
+  type DesktopAudioMeterSnapshot,
   type DesktopAgentRequest,
   type DesktopAgentResponse,
   type DesktopAgentStatus,
@@ -187,6 +190,10 @@ export class DesktopAgentClient {
 
   async audioRuntime(): Promise<DesktopAudioRuntimeSnapshot> {
     return decodeDesktopAudioRuntime(await this.requestReady("audio.runtime"));
+  }
+
+  async audioMeter(request: DesktopAudioMeterRequest): Promise<DesktopAudioMeterSnapshot> {
+    return decodeDesktopAudioMeter(await this.requestReady("audio.meter", { ...request }));
   }
 
   async devices(): Promise<DesktopDeviceInfo[]> {
