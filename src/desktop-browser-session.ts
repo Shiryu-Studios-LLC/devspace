@@ -47,6 +47,7 @@ export function createBrowserSessionProvider(
       ? truncate(version.Browser, 256)
       : undefined;
     const tabs = targets
+      .filter((target) => isRecord(target) && target.type === "page")
       .slice(0, MAX_TABS)
       .flatMap((target) => decodeTarget(target));
 

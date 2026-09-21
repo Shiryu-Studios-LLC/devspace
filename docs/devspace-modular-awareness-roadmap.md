@@ -66,7 +66,7 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [x] Wayland text clipboard read/write with independent `clipboard-read` / `clipboard-write` permissions and bounded 1 MiB payloads.
 - [x] Read-only bounded in-memory desktop notification awareness via passive freedesktop/Plasma D-Bus observation.
 - [x] Desktop notification dismissal and advertised action invocation through native Plasma D-Bus, restricted to still-open notifications observed by the Desktop Agent and gated by `notification-actions`.
-- [ ] Desktop notification inline reply sending is blocked by the current Plasma D-Bus API: live introspection confirms `NotificationReplied(us)` is a signal and `org.kde.NotificationManager` exposes only `InvokeAction(us)`, with no callable method that accepts reply text. Plasma advertises `inline-reply`, so user-entered replies in Plasma work, but DevSpace cannot natively submit reply text without unsafe UI spoofing/automation. The unified Desktop Agent capability model now reports `notification-inline-reply=not_implemented` with this reason instead of implying native reply support.
+- [x] Close desktop notification inline reply sending as **platform-blocked, not an implementation TODO**: live Plasma D-Bus introspection confirms `NotificationReplied(us)` is a signal and `org.kde.NotificationManager` exposes only `InvokeAction(us)`, with no callable method that accepts reply text. Plasma advertises `inline-reply`, so user-entered replies in Plasma work, but DevSpace cannot natively submit reply text without unsafe UI spoofing/automation. The unified Desktop Agent capability model reports `notification-inline-reply=not_implemented` with this verified platform reason.
 - [x] Read-only PipeWire audio graph, application streams, channel ports, active route links, volume/mute/channel metadata, current format, and process-latency metadata.
 - [x] On-demand PipeWire runtime scheduling/xrun telemetry via `pw-top`, including quantum/rate, wait/busy timing, format/channels, and error counts without capturing audio samples.
 - [x] Opt-in PipeWire peak/RMS meters using bounded one-shot `pw-cat` sampling behind a separate `audio-meter` permission that defaults denied; requests are limited to 50–1000 ms and 1–8 channels, return only peak/RMS + dBFS statistics, and discard PCM samples immediately.
@@ -75,7 +75,7 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [x] Network interface/route/service awareness (read-only Linux interfaces, addresses, routes, DNS, listeners, and Cloudflare Tunnel process state).
 - [x] Authorized filesystem watchers limited to configured DevSpace allowed roots, with realpath/symlink escape checks, explicit start/stop/list controls, opt-in recursion, bounded watcher count, and no file-content reads.
 - [x] Application log/tracing correlation for `pid:<pid>` activity IDs, combining bounded timeline events with explicit bounded Linux user-journal reads. Journal source discovery and source-specific reads are also available.
-- [x] Browser-session integration where explicitly authorized; read-only Chromium-compatible CDP metadata is limited to explicitly configured loopback endpoints, browser permission gating is enforced, generic window/application awareness remains primary, and URL query strings/fragments, debugger WebSocket URLs, credentials, and local file paths are excluded.
+- [x] Browser-session integration where explicitly authorized; read-only Chromium-compatible CDP metadata is limited to explicitly configured loopback endpoints, browser permission gating is enforced, generic window/application awareness remains primary, only real `page` targets are surfaced, and URL query strings/fragments, debugger WebSocket URLs, credentials, extension/background targets, and local file paths are excluded. Real-world validation used an isolated disposable Chromium profile; DevSpace does not auto-enable or persist remote debugging on the user's normal browser profile.
 
 ## Event and correlation layer
 
@@ -97,6 +97,12 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [x] Add application-specific adapters only as enhancements to generic desktop awareness; generic capabilities are explicitly primary while application adapters are explicitly optional secondary sources, with runtime metadata and regression coverage enforcing the precedence.
 - [x] Add an optional ShiryuGen generation-trace adapter over bounded local `server.trace.ndjson` spans, with latest/exact trace lookup, ComfyUI prompt/progress correlation, output/attachment metadata, filesystem-event enrichment, and raw prompt text excluded.
 - [x] Keep Unreal, Unity, Blockbench, SteamVR, OBS, ShiryuAudio, ShiryuGen, and browser integrations optional; the shared integration catalog marks every named integration optional/secondary and enabled-by-default policy is independent from core availability.
+
+## Completion status
+
+- [x] Modular-awareness revamp implementation is complete: all roadmap work items are implemented or explicitly closed as verified platform limitations.
+- [x] No unresolved implementation checkboxes remain; CI regression coverage enforces this roadmap closure.
+- [x] Production-safe defaults remain intact: browser CDP is unconfigured unless explicitly authorized, `audio-meter` defaults denied, optional integrations cannot make core unhealthy, and production core hot deployment does not require a core restart.
 
 ## Reliability gates
 
