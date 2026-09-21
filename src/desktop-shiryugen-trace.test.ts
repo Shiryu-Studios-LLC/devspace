@@ -180,3 +180,56 @@ test("ShiryuGen trace reader rejects invalid IDs and ignores rotated symlink esc
   assert.equal(trace.found, false);
   assert.equal(trace.sourceFiles.includes(`${base}.1`), false);
 });
+
+test("ShiryuGen trace reader ignores malformed NDJSON lines safely", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "devspace-shiryugen-malformed-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const base = join(root, "server.trace.ndjson");
+  const traceId = "shiryugen-generate-after-malformed";
+  await writeFile(base, [
+    "{not-json",
+    JSON.stringify(["also", "not", "a", "record"]),
+    record({ traceId, stage: "request.received", startedAt: "2026-09-20T12:30:00.000Z" }),
+    "",
+  ].join("\n"));
+
+  const provider = createShiryuGenTraceProvider({ allowedRoots: [root], basePaths: [base] });
+  const trace = await provider(traceId);
+  assert.equal(trace.found, true);
+  assert.deepEqual(trace.stages.map((stage) => stage.stage), ["request.received"]);
+});
+
+test("ShiryuGen trace reader bounds retained files and byte scanning", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "devspace-shiryugen-bounds-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const base = join(root, "server.trace.ndjson");
+  const rotatedOnlyTrace = "shiryugen-generate-rotated-only";
+  await writeFile(base, `${"x".repeat(1100)}\n${record({
+    traceId: "shiryugen-generate-beyond-budget",
+    stage: "request.received",
+    startedAt: "2026-09-20T13:00:00.000Z",
+  })}\n`);
+  await writeFile(`${base}.1`, `${record({
+    traceId: rotatedOnlyTrace,
+    stage: "request.received",
+    startedAt: "2026-09-20T12:59:00.000Z",
+  })}\n`);
+
+  const byteBounded = createShiryuGenTraceProvider({
+    allowedRoots: [root],
+    basePaths: [base],
+    maxTotalBytes: 1024,
+  });
+  const beyondBudget = await byteBounded("shiryugen-generate-beyond-budget");
+  assert.equal(beyondBudget.found, false);
+  assert.ok(beyondBudget.bytesScanned <= 1101, `unexpected scan size: ${beyondBudget.bytesScanned}`);
+
+  const fileBounded = createShiryuGenTraceProvider({
+    allowedRoots: [root],
+    basePaths: [base],
+    maxFiles: 1,
+  });
+  const omittedRotation = await fileBounded(rotatedOnlyTrace);
+  assert.equal(omittedRotation.found, false);
+  assert.equal(omittedRotation.sourceFiles.includes(`${base}.1`), false);
+});
