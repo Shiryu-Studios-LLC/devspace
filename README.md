@@ -103,9 +103,14 @@ Existing deployments must preserve these files across upgrades:
 
 Do not run `devspace init --force` as an upgrade step. The configuration,
 owner credential, and OAuth database live outside the npm package and should
-not be regenerated during a source update. Stop the existing DevSpace server,
-install the built checkout at the same global location, then restart it through
-the deployment's normal service or scheduled-task wrapper.
+not be regenerated during a source update.
+
+For the Shiryu Studios deployment, do not overwrite the running installation
+in place. Build and validate from an isolated worktree, stage a versioned
+release beside production, and promote it through an independent service that
+can roll back even while DevSpace itself restarts. See
+[`docs/release-and-maintenance.md`](docs/release-and-maintenance.md) for the
+validated release, rollback, dependency-maintenance, and cleanup procedure.
 
 Then initialize DevSpace:
 
