@@ -81,32 +81,65 @@ export async function getPipeWireAudioMeter(
     "Audio meter channels",
   );
   const sampleCount = Math.ceil(AUDIO_METER_SAMPLE_RATE * durationMs / 1000);
+  const { stdout: dumpStdout } = await execFileAsync(PW_DUMP, [], {
+    encoding: "utf8",
+    maxBuffer: DEFAULT_MAX_BUFFER,
+    env: process.env,
+  });
+  const target = resolvePipeWireMeterTarget(JSON.parse(dumpStdout) as unknown, nodeId);
   const args = [
     "--record",
     "--raw",
-    "--target", String(nodeId),
+    "--target", target,
     "--rate", String(AUDIO_METER_SAMPLE_RATE),
     "--channels", String(channels),
     "--format", "f32",
     "--sample-count", String(sampleCount),
   ];
   if (request.captureSink === true) {
-    args.push("--properties", "stream.capture.sink=true");
+    args.push("--properties", JSON.stringify({ "stream.capture.sink": true }));
   }
   args.push("-");
 
-  const { stdout } = await execFileAsync(PW_CAT, args, {
-    encoding: "buffer",
-    maxBuffer: AUDIO_METER_MAX_BUFFER,
-    timeout: durationMs + 2_000,
-    env: process.env,
-  });
+  const expectedBytes = sampleCount * channels * 4;
+  let stdout: Buffer;
+  try {
+    ({ stdout } = await execFileAsync(PW_CAT, args, {
+      encoding: "buffer",
+      maxBuffer: AUDIO_METER_MAX_BUFFER,
+      timeout: durationMs + 2_000,
+      env: process.env,
+    }));
+  } catch (error) {
+    const captured = pipeWireMeterStdoutFromExit(error, expectedBytes);
+    if (!captured) throw error;
+    stdout = captured;
+  }
   return parsePipeWireMeterPcm(stdout, {
     nodeId,
     durationMs,
     sampleRate: AUDIO_METER_SAMPLE_RATE,
     channels,
   });
+}
+
+export function resolvePipeWireMeterTarget(raw: unknown, nodeId: number): string {
+  if (!Array.isArray(raw)) throw new Error("pw-dump returned an invalid PipeWire graph.");
+  const object = raw.find((value): value is PipeWireObject => (
+    Boolean(value && typeof value === "object")
+    && (value as PipeWireObject).type === "PipeWire:Interface:Node"
+    && integerValue((value as PipeWireObject).id) === nodeId
+  ));
+  if (!object) throw new Error(`PipeWire audio node ${nodeId} is no longer available.`);
+  const props = object.info?.props ?? {};
+  const serialValue = props["object.serial"];
+  const serial = typeof serialValue === "string" && /^\d+$/.test(serialValue)
+    ? serialValue
+    : integerValue(serialValue)?.toString();
+  if (serial) return serial;
+  const name = stringValue(props["node.name"]);
+  if (name) return name;
+  throw new Error(`PipeWire audio node ${nodeId} has no stable target serial or name.`);
 }
 
 export async function getPipeWireAudioGraph(): Promise<DesktopAudioGraph> {
@@ -435,6 +468,15 @@ function numberValue(value: unknown): number | undefined {
 
 function numberArray(value: unknown): number[] | undefined {
   return Array.isArray(value) && value.every((item) => typeof item === "number" && Number.isFinite(item)) ? value : undefined;
+}
+
+export function pipeWireMeterStdoutFromExit(error: unknown, expectedBytes: number): Buffer | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const value = error as { stdout?: unknown; stderr?: unknown };
+  if (!Buffer.isBuffer(value.stdout) || value.stdout.length < expectedBytes) return undefined;
+  if (Buffer.isBuffer(value.stderr) && value.stderr.length > 0) return undefined;
+  if (typeof value.stderr === "string" && value.stderr.trim() !== "") return undefined;
+  return value.stdout;
 }
 
 function amplitudeToDbfs(amplitude: number): number {

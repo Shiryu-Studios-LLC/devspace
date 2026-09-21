@@ -116,9 +116,17 @@ function decodeTarget(value: unknown): DesktopBrowserTab[] {
   const id = stringField(value.id);
   const type = stringField(value.type);
   if (!id || !type) return [];
-  const title = truncate(stringField(value.title) ?? "", MAX_TITLE_LENGTH);
+  const title = sanitizeBrowserTitle(stringField(value.title) ?? "");
   const url = sanitizeBrowserUrl(stringField(value.url) ?? "");
   return [{ id: truncate(id, 256), type: truncate(type, 64), title, url }];
+}
+
+function sanitizeBrowserTitle(raw: string): string {
+  const sanitized = raw
+    .split(/(\s+)/)
+    .map((part) => /^(?:https?|file|chrome-extension):\/\//i.test(part) ? sanitizeBrowserUrl(part) : part)
+    .join("");
+  return truncate(sanitized, MAX_TITLE_LENGTH);
 }
 
 function sanitizeBrowserUrl(raw: string): string {

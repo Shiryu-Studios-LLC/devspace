@@ -28,6 +28,12 @@ test("browser session provider returns bounded metadata without debugger URLs or
         title: "Local file",
         url: "file:///home/user/private.txt",
       },
+      {
+        id: "worker-1",
+        type: "service_worker",
+        title: "Service Worker chrome-extension://abcdefghijklmnop/private-worker.js",
+        url: "chrome-extension://abcdefghijklmnop/private-worker.js",
+      },
     ]);
   }) as typeof fetch;
 
@@ -48,6 +54,7 @@ test("browser session provider returns bounded metadata without debugger URLs or
     tabs: [
       { id: "page-1", type: "page", title: "Inbox", url: "https://example.com/mail" },
       { id: "page-2", type: "page", title: "Local file", url: "file://[local-file]" },
+      { id: "worker-1", type: "service_worker", title: "Service Worker chrome-extension://[redacted]", url: "chrome-extension://[redacted]" },
     ],
   });
   assert.equal(JSON.stringify(snapshot).includes("webSocketDebuggerUrl"), false);

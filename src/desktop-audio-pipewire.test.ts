@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { normalizePipeWireAudioGraph, parsePipeWireMeterPcm, parsePipeWireTop } from "./desktop-audio-pipewire.js";
+import { normalizePipeWireAudioGraph, parsePipeWireMeterPcm, parsePipeWireTop, pipeWireMeterStdoutFromExit, resolvePipeWireMeterTarget } from "./desktop-audio-pipewire.js";
 
 test("PipeWire audio graph includes non-invasive runtime control metadata", () => {
   const graph = normalizePipeWireAudioGraph([
@@ -73,6 +73,31 @@ test("PipeWire audio graph includes non-invasive runtime control metadata", () =
     isSink: false,
     isSource: false,
   });
+});
+
+test("PipeWire audio meter resolves graph IDs to pw-cat target serials", () => {
+  assert.equal(resolvePipeWireMeterTarget([
+    {
+      id: 322,
+      type: "PipeWire:Interface:Node",
+      info: { props: { "object.serial": "1158888", "node.name": "shiryu.cable.1.input" } },
+    },
+  ], 322), "1158888");
+  assert.equal(resolvePipeWireMeterTarget([
+    {
+      id: 42,
+      type: "PipeWire:Interface:Node",
+      info: { props: { "node.name": "fallback.node" } },
+    },
+  ], 42), "fallback.node");
+  assert.throws(() => resolvePipeWireMeterTarget([], 42), /no longer available/);
+});
+
+test("PipeWire audio meter accepts complete bounded stdout from pw-cat sample-count exits only", () => {
+  const complete = Buffer.alloc(19_200);
+  assert.equal(pipeWireMeterStdoutFromExit({ stdout: complete, stderr: Buffer.alloc(0) }, 19_200), complete);
+  assert.equal(pipeWireMeterStdoutFromExit({ stdout: Buffer.alloc(19_199), stderr: Buffer.alloc(0) }, 19_200), undefined);
+  assert.equal(pipeWireMeterStdoutFromExit({ stdout: complete, stderr: Buffer.from("failure") }, 19_200), undefined);
 });
 
 test("PipeWire audio meter reduces bounded PCM samples to peak/RMS statistics without retaining samples", () => {
