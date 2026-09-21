@@ -1,4 +1,5 @@
 import { createReadStream, existsSync, realpathSync, readdirSync, statSync } from "node:fs";
+import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -11,6 +12,7 @@ import { isPathInsideRoot } from "./roots.js";
 
 const MAX_TRACE_FILES = 6;
 const MAX_TOTAL_BYTES = 64 * 1024 * 1024;
+const MAX_LATEST_SEARCH_BYTES = 16 * 1024 * 1024;
 const MAX_TRACE_ID_LENGTH = 256;
 const GENERATION_TRACE_ATTRIBUTE = "shiryugen.generation.trace_id";
 const GENERATION_ACTION_ATTRIBUTE = "shiryugen.generation.action";
@@ -149,30 +151,41 @@ async function findLatestTraceId(
   let bytesScanned = 0;
   let recordsScanned = 0;
   const scannedFiles: string[] = [];
+  const searchBudget = Math.min(maxTotalBytes, MAX_LATEST_SEARCH_BYTES);
 
   for (const file of sourceFiles) {
-    if (bytesScanned >= maxTotalBytes) break;
+    if (bytesScanned >= searchBudget) break;
     scannedFiles.push(file);
-    const input = createReadStream(file, { encoding: "utf8" });
-    const lines = createInterface({ input, crlfDelay: Infinity });
-    for await (const line of lines) {
-      const bytes = Buffer.byteLength(line, "utf8") + 1;
-      bytesScanned += bytes;
-      recordsScanned += 1;
-      if (bytesScanned > maxTotalBytes) {
-        input.destroy();
-        break;
+    const size = statSync(file).size;
+    const bytesToRead = Math.min(size, searchBudget - bytesScanned);
+    if (bytesToRead <= 0) continue;
+    const position = size - bytesToRead;
+    const handle = await open(file, "r");
+    try {
+      const buffer = Buffer.allocUnsafe(bytesToRead);
+      const { bytesRead } = await handle.read(buffer, 0, bytesToRead, position);
+      bytesScanned += bytesRead;
+      let text = buffer.subarray(0, bytesRead).toString("utf8");
+      if (position > 0) {
+        const newline = text.indexOf("\n");
+        text = newline === -1 ? "" : text.slice(newline + 1);
       }
-      if (!line.includes(GENERATION_TRACE_ATTRIBUTE)) continue;
-      const record = parseTraceRecord(line);
-      const attributes = asRecord(record?.attributes);
-      const candidate = stringValue(attributes?.[GENERATION_TRACE_ATTRIBUTE]);
-      if (!candidate || !validTraceId(candidate)) continue;
-      const startNs = bigintValue(record?.startTimeUnixNano);
-      if (startNs !== undefined && (latestStartNs === undefined || startNs > latestStartNs)) {
-        latestStartNs = startNs;
-        latestTraceId = candidate;
+      const lines = text.split("\n").filter((line) => line.length > 0);
+      recordsScanned += lines.length;
+      for (const line of lines) {
+        if (!line.includes(GENERATION_TRACE_ATTRIBUTE)) continue;
+        const record = parseTraceRecord(line);
+        const attributes = asRecord(record?.attributes);
+        const candidate = stringValue(attributes?.[GENERATION_TRACE_ATTRIBUTE]);
+        if (!candidate || !validTraceId(candidate)) continue;
+        const startNs = bigintValue(record?.startTimeUnixNano);
+        if (startNs !== undefined && (latestStartNs === undefined || startNs > latestStartNs)) {
+          latestStartNs = startNs;
+          latestTraceId = candidate;
+        }
       }
+    } finally {
+      await handle.close();
     }
     if (latestTraceId) break;
   }
