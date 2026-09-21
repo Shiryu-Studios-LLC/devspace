@@ -54,6 +54,9 @@ test("generic awareness is primary while application adapters remain optional se
       optional: true,
     },
   );
+  const inlineReply = capabilities.find((capability) => capability.id === "notification-inline-reply");
+  assert.equal(inlineReply?.state, "not_implemented");
+  assert.match(inlineReply?.detail ?? "", /no callable method that accepts reply text/);
   for (const capability of capabilities.filter((entry) => !entry.id.startsWith("apps-"))) {
     assert.equal(capability.sourceKind, "generic", capability.id);
     assert.equal(capability.sourcePriority, "primary", capability.id);

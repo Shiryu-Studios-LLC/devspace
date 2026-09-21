@@ -914,6 +914,11 @@ export function defaultDesktopCapabilities(
     permissionAwareCapability(permissions, "notification-actions", notificationActionsReady && notificationsReady,
       "Dismiss observed notifications and invoke only action IDs advertised by those notifications through Plasma D-Bus",
       "Plasma notification action D-Bus service is unavailable"),
+    {
+      id: "notification-inline-reply",
+      state: "not_implemented",
+      detail: "Plasma advertises inline-reply and emits NotificationReplied(us), but the live D-Bus interface exposes no callable method that accepts reply text; DevSpace will not spoof the notification server or fake replies with UI automation",
+    },
     permissionAwareCapability(permissions, "audio", audioReady,
       "Read-only PipeWire audio nodes, ports, routing links, volume/mute metadata, current format, and process-latency metadata",
       "PipeWire user-session graph is unavailable"),
