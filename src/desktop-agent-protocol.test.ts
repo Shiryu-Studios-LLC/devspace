@@ -15,6 +15,8 @@ import {
   decodeDesktopNetworkSnapshot,
   decodeDesktopNotificationList,
   decodeDesktopNotificationControlResult,
+  decodeDesktopFilesystemWatchInfo,
+  decodeDesktopFilesystemWatchList,
   decodeDesktopVirtualDesktopSnapshot,
   decodeDesktopLogReadResult,
   decodeDesktopLogSources,
@@ -224,6 +226,35 @@ test("desktop agent accepts bounded high-level input requests", () => {
   assert.throws(
     () => decodeDesktopAgentRequest({ ...chord, params: { type: "type-text", text: "x".repeat(16_385) } }),
     /at most 16384/,
+  );
+});
+
+test("desktop agent accepts bounded filesystem watch requests", () => {
+  const start: DesktopAgentRequest = {
+    requestId: "request-fswatch-start",
+    protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
+    authToken: "a".repeat(64),
+    method: "filesystem.watch.start",
+    params: { path: "/tmp/project", recursive: true },
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(start))), start);
+  const stop: DesktopAgentRequest = {
+    ...start,
+    requestId: "request-fswatch-stop",
+    method: "filesystem.watch.stop",
+    params: { id: "fswatch:123" },
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(stop))), stop);
+  const list: DesktopAgentRequest = {
+    ...start,
+    requestId: "request-fswatch-list",
+    method: "filesystem.watch.list",
+    params: {},
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(list))), list);
+  assert.throws(
+    () => decodeDesktopAgentRequest({ ...start, params: { path: "/tmp/project", recursive: "yes" } }),
+    /filesystem.recursive/,
   );
 });
 
@@ -726,6 +757,20 @@ test("desktop agent decodes a structured virtual desktop snapshot", () => {
   assert.equal(snapshot.currentId, "desktop-2");
   assert.equal(snapshot.desktops[1]?.name, "VR");
   assert.equal(snapshot.desktops[1]?.current, true);
+});
+
+test("desktop agent decodes structured filesystem watch results", () => {
+  const watch = decodeDesktopFilesystemWatchInfo({
+    id: "fswatch:123",
+    path: "/tmp/project",
+    recursive: true,
+    startedAt: "2026-09-20T12:00:00.000Z",
+    eventCount: 2,
+    lastEventAt: "2026-09-20T12:00:01.000Z",
+    state: "ready",
+  });
+  assert.equal(watch.eventCount, 2);
+  assert.equal(decodeDesktopFilesystemWatchList([watch]).length, 1);
 });
 
 test("desktop agent decodes a structured notification control result", () => {

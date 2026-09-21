@@ -18,6 +18,7 @@ let stopPermissionWatcher: (() => void) | undefined;
 const daemon = new DesktopAgentDaemon({
   stateDir: config.stateDir,
   permissions: config.desktopPermissions,
+  allowedRoots: config.allowedRoots,
   onClosed: () => {
     stopPermissionWatcher?.();
     if (!shuttingDown) process.exit(0);

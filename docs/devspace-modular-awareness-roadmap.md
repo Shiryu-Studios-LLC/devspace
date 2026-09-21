@@ -72,7 +72,7 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [x] Read-only Linux USB, PCI/PCIe, block-storage, and Bluetooth inventory with privacy-safe identifiers.
 - [x] Hardware/device connect/disconnect/state-change events in the bounded activity timeline.
 - [x] Network interface/route/service awareness (read-only Linux interfaces, addresses, routes, DNS, listeners, and Cloudflare Tunnel process state).
-- [ ] Authorized filesystem watchers.
+- [x] Authorized filesystem watchers limited to configured DevSpace allowed roots, with realpath/symlink escape checks, explicit start/stop/list controls, opt-in recursion, bounded watcher count, and no file-content reads.
 - [x] Application log/tracing correlation for `pid:<pid>` activity IDs, combining bounded timeline events with explicit bounded Linux user-journal reads. Journal source discovery and source-specific reads are also available.
 - [ ] Browser-session integration where explicitly authorized.
 
@@ -85,7 +85,7 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [x] Add PipeWire audio stream start/stop/change and route create/remove/topology-change events, while suppressing noisy link transport-state flaps.
 - [x] Add device connect/disconnect/change events with privacy-safe stable IDs.
 - [x] Add notification creation/closure events correlated to the sender PID when Plasma provides it.
-- [ ] Add authorized filesystem events.
+- [x] Add authorized filesystem create/change/delete metadata events from explicit watchers to the bounded activity timeline; disabling `filesystem-watch` closes active watchers and they do not auto-resume.
 - [x] Add network events for interface state/address changes, route/DNS changes, listener open/close, and Cloudflare Tunnel start/stop. Display connect/disconnect/layout/mode/brightness changes are already captured.
 - [x] Build a bounded in-memory activity timeline that can answer questions such as “what happened after I clicked Generate?” by comparing event sequence cursors.
 

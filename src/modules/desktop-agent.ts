@@ -4,6 +4,7 @@ import { readFile, rm, stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import * as z from "zod/v4";
 import type { ServerConfig } from "../config.js";
+import { assertAllowedPath } from "../roots.js";
 import {
   DesktopAgentClient,
   DesktopAgentClientError,
@@ -27,6 +28,7 @@ import type {
   DesktopClipboardReadResult,
   DesktopClipboardWriteResult,
   DesktopAccessibilitySnapshot,
+  DesktopFilesystemWatchInfo,
   DesktopWindowInfo,
 } from "../desktop-agent-protocol.js";
 
@@ -749,6 +751,9 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
             "window.closed",
             "window.changed",
             "window.focused",
+            "filesystem.created",
+            "filesystem.changed",
+            "filesystem.deleted",
             "display.connected",
             "display.disconnected",
             "display.changed",
@@ -775,7 +780,7 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
             "virtual-desktop.changed",
             "virtual-desktop.current.changed",
           ]),
-          sourceModule: z.enum(["processes", "windows", "accessibility", "displays", "audio", "devices", "network", "notifications", "virtual-desktops"]),
+          sourceModule: z.enum(["processes", "windows", "accessibility", "filesystem", "displays", "audio", "devices", "network", "notifications", "virtual-desktops"]),
           entityId: z.string(),
           correlationId: z.string(),
           applicationId: z.string().optional(),
@@ -1260,6 +1265,101 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
 
   registerAppTool(
     server,
+    "desktop_list_filesystem_watches",
+    {
+      title: "List Desktop Filesystem Watches",
+      description:
+        "List active explicit filesystem watchers. Watches are limited to configured DevSpace allowed roots and report path metadata only; file contents are never read.",
+      inputSchema: {},
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        watches: z.array(filesystemWatchSchema()).optional(),
+      },
+      _meta: {},
+      annotations: readAnnotations,
+    },
+    async () => {
+      try {
+        const watches = await client.filesystemWatches();
+        const result = `${watches.length} active filesystem watch${watches.length === 1 ? "" : "es"}.`;
+        return {
+          content: [{ type: "text" as const, text: result }],
+          structuredContent: { status: "ready" as const, result, watches },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "desktop_watch_filesystem",
+    {
+      title: "Watch Filesystem Path",
+      description:
+        "Start an explicit metadata-only filesystem watcher for an existing path inside configured DevSpace allowed roots. Recursive watching is opt-in. Create/change/delete events are added to the bounded desktop activity timeline; file contents are never read.",
+      inputSchema: {
+        path: z.string().min(1),
+        recursive: z.boolean().optional(),
+      },
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        watch: filesystemWatchSchema().optional(),
+      },
+      _meta: {},
+      annotations: inputAnnotations,
+    },
+    async ({ path, recursive }) => {
+      try {
+        const safePath = assertAllowedPath(path, config.allowedRoots);
+        const watch = await client.startFilesystemWatch(safePath, recursive ?? false);
+        const result = `Watching ${watch.path}${watch.recursive ? " recursively" : ""}; watch id ${watch.id}.`;
+        return {
+          content: [{ type: "text" as const, text: result }],
+          structuredContent: { status: "ready" as const, result, watch },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "desktop_unwatch_filesystem",
+    {
+      title: "Stop Filesystem Watch",
+      description: "Stop one active filesystem watcher by the id returned from desktop_watch_filesystem or desktop_list_filesystem_watches.",
+      inputSchema: {
+        id: z.string().min(1).max(128),
+      },
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        watch: filesystemWatchSchema().optional(),
+      },
+      _meta: {},
+      annotations: inputAnnotations,
+    },
+    async ({ id }) => {
+      try {
+        const watch = await client.stopFilesystemWatch(id);
+        const result = `Stopped filesystem watch ${watch.id} for ${watch.path}.`;
+        return {
+          content: [{ type: "text" as const, text: result }],
+          structuredContent: { status: "ready" as const, result, watch },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
     "desktop_trace_correlation",
     {
       title: "Desktop Trace Correlation",
@@ -1407,6 +1507,19 @@ function describeStatus(status: DesktopAgentStatus): string {
     `session ${status.sessionType}`,
     `protocol ${status.protocolVersion}`,
   ].join("; ");
+}
+
+function filesystemWatchSchema() {
+  return z.object({
+    id: z.string(),
+    path: z.string(),
+    recursive: z.boolean(),
+    startedAt: z.string(),
+    eventCount: z.number().int().nonnegative(),
+    lastEventAt: z.string().optional(),
+    state: z.enum(["ready", "failed"]),
+    error: z.string().optional(),
+  });
 }
 
 function formatAccessibilitySummary(snapshot: DesktopAccessibilitySnapshot): string {

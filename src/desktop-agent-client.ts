@@ -22,6 +22,8 @@ import {
   decodeDesktopVirtualDesktopSnapshot,
   decodeDesktopNotificationList,
   decodeDesktopNotificationControlResult,
+  decodeDesktopFilesystemWatchInfo,
+  decodeDesktopFilesystemWatchList,
   decodeDesktopLogReadResult,
   decodeDesktopLogSources,
   decodeDesktopTraceCorrelation,
@@ -49,6 +51,7 @@ import {
   type DesktopNotificationInfo,
   type DesktopNotificationControlRequest,
   type DesktopNotificationControlResult,
+  type DesktopFilesystemWatchInfo,
   type DesktopLogReadResult,
   type DesktopLogSource,
   type DesktopTraceCorrelation,
@@ -214,6 +217,18 @@ export class DesktopAgentClient {
 
   async notificationControl(request: DesktopNotificationControlRequest): Promise<DesktopNotificationControlResult> {
     return decodeDesktopNotificationControlResult(await this.requestReady("notifications.perform", { ...request }));
+  }
+
+  async filesystemWatches(): Promise<DesktopFilesystemWatchInfo[]> {
+    return decodeDesktopFilesystemWatchList(await this.requestReady("filesystem.watch.list"));
+  }
+
+  async startFilesystemWatch(path: string, recursive = false): Promise<DesktopFilesystemWatchInfo> {
+    return decodeDesktopFilesystemWatchInfo(await this.requestReady("filesystem.watch.start", { path, recursive }));
+  }
+
+  async stopFilesystemWatch(id: string): Promise<DesktopFilesystemWatchInfo> {
+    return decodeDesktopFilesystemWatchInfo(await this.requestReady("filesystem.watch.stop", { id }));
   }
 
   async stop(): Promise<DesktopAgentStatus | undefined> {

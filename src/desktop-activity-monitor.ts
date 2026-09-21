@@ -1,3 +1,4 @@
+import type { DesktopFilesystemChange } from "./desktop-filesystem-watch.js";
 import type {
   DesktopActivityEvent,
   DesktopAudioGraph,
@@ -100,6 +101,17 @@ export class DesktopActivityMonitor {
   recent(limit = 200): DesktopActivityEvent[] {
     const safeLimit = Number.isSafeInteger(limit) ? Math.max(1, Math.min(limit, this.maxEvents)) : 200;
     return this.events.slice(-safeLimit);
+  }
+
+  recordFilesystemEvent(event: DesktopFilesystemChange): void {
+    this.push({
+      type: `filesystem.${event.type}` as "filesystem.created" | "filesystem.changed" | "filesystem.deleted",
+      sourceModule: "filesystem",
+      entityId: event.path,
+      correlationId: `filesystem:${event.path}`,
+      title: event.path,
+      summary: `Filesystem ${event.type}: ${event.path}.`,
+    });
   }
 
   recordWindowFocus(event: {

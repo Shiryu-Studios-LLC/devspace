@@ -93,6 +93,39 @@ test("desktop activity monitor records deduplicated AT-SPI window focus changes"
   assert.equal(monitor.recent()[1]?.title, "Confirm");
 });
 
+test("desktop activity monitor records filesystem metadata events", () => {
+  const monitor = new DesktopActivityMonitor({
+    windows: async () => [],
+    processes: async () => [],
+    displays: async () => [],
+  });
+  monitor.recordFilesystemEvent({
+    watchId: "fswatch:123",
+    type: "created",
+    path: "/tmp/project/output.png",
+    occurredAt: "2026-09-20T12:00:00.000Z",
+  });
+  monitor.recordFilesystemEvent({
+    watchId: "fswatch:123",
+    type: "changed",
+    path: "/tmp/project/output.png",
+    occurredAt: "2026-09-20T12:00:01.000Z",
+  });
+  monitor.recordFilesystemEvent({
+    watchId: "fswatch:123",
+    type: "deleted",
+    path: "/tmp/project/output.png",
+    occurredAt: "2026-09-20T12:00:02.000Z",
+  });
+  assert.deepEqual(monitor.recent().map((event) => event.type), [
+    "filesystem.created",
+    "filesystem.changed",
+    "filesystem.deleted",
+  ]);
+  assert.equal(monitor.recent()[0]?.sourceModule, "filesystem");
+  assert.equal(monitor.recent()[0]?.correlationId, "filesystem:/tmp/project/output.png");
+});
+
 test("desktop activity monitor records PipeWire stream and route changes", async () => {
   let audio = audioGraph(
     [

@@ -958,6 +958,67 @@ test("desktop agent serves guarded notification controls and enforces notificati
   assert.equal(calls, 1);
 });
 
+test("desktop agent serves allowed-root filesystem watches and enforces filesystem-watch permission", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-filesystem-watch-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const permissions = defaultDesktopPermissionPolicy();
+  permissions["filesystem-watch"] = false;
+  let starts = 0;
+  let stops = 0;
+  let closes = 0;
+  const watch = {
+    id: "fswatch:123",
+    path: stateDir,
+    recursive: true,
+    startedAt: "2026-09-20T12:00:00.000Z",
+    eventCount: 0,
+    state: "ready" as const,
+  };
+  const daemon = new DesktopAgentDaemon({
+    stateDir,
+    permissions,
+    allowedRoots: [stateDir],
+    capabilities: () => [{ id: "filesystem-watch", state: "ready" }],
+    filesystemWatchManager: {
+      start: (path, recursive) => {
+        starts += 1;
+        return { ...watch, path, recursive: Boolean(recursive) };
+      },
+      stop: () => {
+        stops += 1;
+        return watch;
+      },
+      list: () => [watch],
+      close: () => { closes += 1; },
+    },
+  });
+  t.after(() => daemon.close());
+  await daemon.start();
+  const client = new DesktopAgentClient({
+    stateDir,
+    spawnDaemon: () => assert.fail("existing daemon should not be respawned"),
+  });
+
+  await assert.rejects(
+    () => client.startFilesystemWatch(stateDir, true),
+    (error: unknown) => error instanceof DesktopAgentClientError && error.code === "DESKTOP_PERMISSION_DENIED",
+  );
+  assert.equal(starts, 0);
+
+  daemon.updatePermissions(defaultDesktopPermissionPolicy());
+  const started = await client.startFilesystemWatch(stateDir, true);
+  assert.equal(started.recursive, true);
+  assert.equal(starts, 1);
+  assert.equal((await client.filesystemWatches()).length, 1);
+  await client.stopFilesystemWatch(watch.id);
+  assert.equal(stops, 1);
+
+  const deniedAgain = defaultDesktopPermissionPolicy();
+  deniedAgain["filesystem-watch"] = false;
+  daemon.updatePermissions(deniedAgain);
+  assert.equal(closes, 1, "disabling filesystem-watch should close active watchers");
+});
+
 test("desktop agent serves explicit bounded log sources and reads", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-logs-"));
   t.after(() => rm(stateDir, { recursive: true, force: true }));

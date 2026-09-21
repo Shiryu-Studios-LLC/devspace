@@ -249,6 +249,9 @@ export type DesktopActivityEventType =
   | "window.closed"
   | "window.changed"
   | "window.focused"
+  | "filesystem.created"
+  | "filesystem.changed"
+  | "filesystem.deleted"
   | "display.connected"
   | "display.disconnected"
   | "display.changed"
@@ -279,7 +282,7 @@ export interface DesktopActivityEvent {
   sequence: number;
   timestamp: string;
   type: DesktopActivityEventType;
-  sourceModule: "processes" | "windows" | "accessibility" | "displays" | "audio" | "devices" | "network" | "notifications" | "virtual-desktops";
+  sourceModule: "processes" | "windows" | "accessibility" | "filesystem" | "displays" | "audio" | "devices" | "network" | "notifications" | "virtual-desktops";
   entityId: string;
   correlationId: string;
   applicationId?: string;
@@ -509,6 +512,17 @@ export interface DesktopNotificationControlResult {
   completedAt: string;
 }
 
+export interface DesktopFilesystemWatchInfo {
+  id: string;
+  path: string;
+  recursive: boolean;
+  startedAt: string;
+  eventCount: number;
+  lastEventAt?: string;
+  state: "ready" | "failed";
+  error?: string;
+}
+
 export type DesktopAgentMethod =
   | "hello"
   | "desktop.status"
@@ -527,6 +541,9 @@ export type DesktopAgentMethod =
   | "trace.correlate"
   | "notifications.recent"
   | "notifications.perform"
+  | "filesystem.watch.list"
+  | "filesystem.watch.start"
+  | "filesystem.watch.stop"
   | "screen.capture"
   | "clipboard.read"
   | "clipboard.write"
@@ -541,7 +558,7 @@ type DesktopAgentRequestBase = {
   authToken: string;
 };
 
-type DesktopAgentNoParamsMethod = Exclude<DesktopAgentMethod, "logs.read" | "trace.correlate" | "screen.capture" | "clipboard.write" | "accessibility.snapshot" | "accessibility.action" | "input.perform" | "notifications.perform">;
+type DesktopAgentNoParamsMethod = Exclude<DesktopAgentMethod, "logs.read" | "trace.correlate" | "screen.capture" | "clipboard.write" | "accessibility.snapshot" | "accessibility.action" | "input.perform" | "notifications.perform" | "filesystem.watch.start" | "filesystem.watch.stop">;
 
 export type DesktopAgentRequest = DesktopAgentRequestBase & (
   | {
@@ -593,6 +610,14 @@ export type DesktopAgentRequest = DesktopAgentRequestBase & (
   | {
       method: "notifications.perform";
       params: DesktopNotificationControlRequest;
+    }
+  | {
+      method: "filesystem.watch.start";
+      params: { path: string; recursive?: boolean };
+    }
+  | {
+      method: "filesystem.watch.stop";
+      params: { id: string };
     }
 );
 
@@ -855,6 +880,34 @@ export function decodeDesktopAgentRequest(value: unknown): DesktopAgentRequest {
       };
     }
     throw new DesktopAgentProtocolError("INVALID_PARAMS", `Unknown notification action type: ${type}`);
+  }
+  if (method === "filesystem.watch.start") {
+    const allowed = new Set(["path", "recursive"]);
+    if (Object.keys(params).some((key) => !allowed.has(key))) {
+      throw new DesktopAgentProtocolError("INVALID_PARAMS", "filesystem.watch.start received unknown parameters.");
+    }
+    const path = requiredString(params.path, "filesystem.path");
+    const recursive = params.recursive === undefined ? undefined : requiredBoolean(params.recursive, "filesystem.recursive");
+    return {
+      requestId,
+      protocolVersion,
+      authToken,
+      method,
+      params: { path, ...(recursive === undefined ? {} : { recursive }) },
+    };
+  }
+  if (method === "filesystem.watch.stop") {
+    const allowed = new Set(["id"]);
+    if (Object.keys(params).some((key) => !allowed.has(key))) {
+      throw new DesktopAgentProtocolError("INVALID_PARAMS", "filesystem.watch.stop received unknown parameters.");
+    }
+    return {
+      requestId,
+      protocolVersion,
+      authToken,
+      method,
+      params: { id: requiredString(params.id, "filesystem.id") },
+    };
   }
   if (method === "clipboard.write") {
     const allowed = new Set(["text"]);
@@ -1325,6 +1378,38 @@ export function decodeDesktopNotificationControlResult(value: unknown): DesktopN
   };
 }
 
+export function decodeDesktopFilesystemWatchInfo(value: unknown): DesktopFilesystemWatchInfo {
+  const record = asRecord(value);
+  if (!record) {
+    throw new DesktopAgentProtocolError("INVALID_FILESYSTEM_WATCH", "Desktop agent returned an invalid filesystem watch.");
+  }
+  const state = requiredString(record.state, "filesystem.state") as DesktopFilesystemWatchInfo["state"];
+  if (state !== "ready" && state !== "failed") {
+    throw new DesktopAgentProtocolError("INVALID_FILESYSTEM_WATCH", `Invalid filesystem watch state: ${state}`);
+  }
+  const eventCount = requiredInteger(record.eventCount, "filesystem.eventCount");
+  if (eventCount < 0) {
+    throw new DesktopAgentProtocolError("INVALID_FILESYSTEM_WATCH", "Filesystem watch event count must be non-negative.");
+  }
+  return {
+    id: requiredString(record.id, "filesystem.id"),
+    path: requiredString(record.path, "filesystem.path"),
+    recursive: requiredBoolean(record.recursive, "filesystem.recursive"),
+    startedAt: requiredString(record.startedAt, "filesystem.startedAt"),
+    eventCount,
+    ...(record.lastEventAt === undefined ? {} : { lastEventAt: requiredString(record.lastEventAt, "filesystem.lastEventAt") }),
+    state,
+    ...(record.error === undefined ? {} : { error: requiredString(record.error, "filesystem.error") }),
+  };
+}
+
+export function decodeDesktopFilesystemWatchList(value: unknown): DesktopFilesystemWatchInfo[] {
+  if (!Array.isArray(value)) {
+    throw new DesktopAgentProtocolError("INVALID_FILESYSTEM_WATCH", "Desktop agent returned an invalid filesystem watch list.");
+  }
+  return value.map(decodeDesktopFilesystemWatchInfo);
+}
+
 export function desktopAgentProtocolVersion(): number {
   return DESKTOP_AGENT_PROTOCOL_VERSION;
 }
@@ -1436,7 +1521,7 @@ function decodeDesktopActivityEvent(value: unknown): DesktopActivityEvent {
     throw new DesktopAgentProtocolError("INVALID_EVENTS", `Invalid desktop activity event type: ${type}`);
   }
   const sourceModule = requiredString(record.sourceModule, "event.sourceModule");
-  if (sourceModule !== "processes" && sourceModule !== "windows" && sourceModule !== "accessibility" && sourceModule !== "displays" && sourceModule !== "audio" && sourceModule !== "devices" && sourceModule !== "network" && sourceModule !== "notifications" && sourceModule !== "virtual-desktops") {
+  if (sourceModule !== "processes" && sourceModule !== "windows" && sourceModule !== "accessibility" && sourceModule !== "filesystem" && sourceModule !== "displays" && sourceModule !== "audio" && sourceModule !== "devices" && sourceModule !== "network" && sourceModule !== "notifications" && sourceModule !== "virtual-desktops") {
     throw new DesktopAgentProtocolError("INVALID_EVENTS", `Invalid desktop activity source: ${sourceModule}`);
   }
   return {
@@ -1722,6 +1807,9 @@ function isDesktopAgentMethod(value: string): value is DesktopAgentMethod {
     || value === "trace.correlate"
     || value === "notifications.recent"
     || value === "notifications.perform"
+    || value === "filesystem.watch.list"
+    || value === "filesystem.watch.start"
+    || value === "filesystem.watch.stop"
     || value === "screen.capture"
     || value === "clipboard.read"
     || value === "clipboard.write"
@@ -1771,6 +1859,9 @@ function isDesktopActivityEventType(value: string): value is DesktopActivityEven
     || value === "window.closed"
     || value === "window.changed"
     || value === "window.focused"
+    || value === "filesystem.created"
+    || value === "filesystem.changed"
+    || value === "filesystem.deleted"
     || value === "display.connected"
     || value === "display.disconnected"
     || value === "display.changed"

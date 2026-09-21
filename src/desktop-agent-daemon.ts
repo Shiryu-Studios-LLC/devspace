@@ -67,6 +67,7 @@ import {
   type DesktopNotificationInfo,
   type DesktopNotificationControlRequest,
   type DesktopNotificationControlResult,
+  type DesktopFilesystemWatchInfo,
   type DesktopLogReadResult,
   type DesktopLogSource,
   type DesktopTraceCorrelation,
@@ -116,6 +117,11 @@ import {
   createYdotoolInputProvider,
   ydotoolInputAvailable,
 } from "./desktop-input-ydotool.js";
+import {
+  LinuxFilesystemWatchManager,
+  linuxFilesystemWatchAvailable,
+  type DesktopFilesystemWatchManager,
+} from "./desktop-filesystem-watch.js";
 
 const MAX_REQUEST_BYTES = 128 * 1024;
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -144,6 +150,8 @@ export interface DesktopAgentDaemonOptions {
   notificationMonitor?: DesktopNotificationMonitor;
   notifications?: () => Promise<DesktopNotificationInfo[]>;
   notificationControl?: (request: DesktopNotificationControlRequest) => Promise<DesktopNotificationControlResult>;
+  allowedRoots?: string[];
+  filesystemWatchManager?: DesktopFilesystemWatchManager;
   activityMonitor?: DesktopActivityMonitor;
   focusMonitor?: DesktopFocusMonitor;
   now?: () => number;
@@ -174,6 +182,8 @@ export class DesktopAgentDaemon {
   private readonly notificationMonitor?: DesktopNotificationMonitor;
   private readonly notificationsProvider: () => Promise<DesktopNotificationInfo[]>;
   private readonly notificationControlProvider: (request: DesktopNotificationControlRequest) => Promise<DesktopNotificationControlResult>;
+  private readonly allowedRoots: string[];
+  private readonly filesystemWatchManager: DesktopFilesystemWatchManager;
   private readonly activityMonitor: DesktopActivityMonitor;
   private readonly focusMonitor: DesktopFocusMonitor;
   private readonly now: () => number;
@@ -190,7 +200,8 @@ export class DesktopAgentDaemon {
     this.paths = options.paths ?? desktopAgentPaths(options.stateDir);
     this.lock = new DesktopAgentLock(this.paths);
     this.permissionPolicy = options.permissions ?? defaultDesktopPermissionPolicy();
-    this.capabilitiesProvider = options.capabilities ?? (() => defaultDesktopCapabilities(this.permissionPolicy));
+    this.allowedRoots = [...(options.allowedRoots ?? [])];
+    this.capabilitiesProvider = options.capabilities ?? (() => defaultDesktopCapabilities(this.permissionPolicy, this.allowedRoots));
     this.windowsProvider = options.windows ?? listKdeWindows;
     this.displaysProvider = options.displays ?? listKdeDisplays;
     this.processesProvider = options.processes ?? (() => defaultProcessInventory(desktopPermissionGranted(this.permissionPolicy, "windows")));
@@ -239,6 +250,15 @@ export class DesktopAgentDaemon {
         if (!desktopPermissionGranted(this.permissionPolicy, "events")
           || !desktopPermissionGranted(this.permissionPolicy, "accessibility")) return;
         this.activityMonitor.recordWindowFocus(event);
+      },
+    });
+    this.filesystemWatchManager = options.filesystemWatchManager ?? new LinuxFilesystemWatchManager({
+      allowedRoots: this.allowedRoots,
+      now: options.now,
+      onEvent: (event) => {
+        if (!desktopPermissionGranted(this.permissionPolicy, "events")
+          || !desktopPermissionGranted(this.permissionPolicy, "filesystem-watch")) return;
+        this.activityMonitor.recordFilesystemEvent(event);
       },
     });
     this.now = options.now ?? Date.now;
@@ -308,6 +328,10 @@ export class DesktopAgentDaemon {
 
     if (this.focusMonitoringReady()) this.focusMonitor.start();
     else this.focusMonitor.stop();
+
+    if (!desktopPermissionGranted(this.permissionPolicy, "filesystem-watch")) {
+      this.filesystemWatchManager.close();
+    }
   }
 
   private focusMonitoringReady(): boolean {
@@ -339,6 +363,7 @@ export class DesktopAgentDaemon {
     this.stopping = true;
     this.activityMonitor.stop();
     this.focusMonitor.stop();
+    this.filesystemWatchManager.close();
     this.notificationMonitor?.stop();
     this.closePromise = (async () => {
       for (const socket of this.sockets) socket.destroy();
@@ -640,6 +665,36 @@ export class DesktopAgentDaemon {
         }
         return this.notificationControlProvider(request.params);
       }
+      case "filesystem.watch.list": {
+        const filesystemCapability = this.capabilitiesProvider().find((capability) => capability.id === "filesystem-watch");
+        if (filesystemCapability?.state !== "ready") {
+          throw new DesktopAgentProtocolError(
+            "DESKTOP_FILESYSTEM_WATCH_UNAVAILABLE",
+            filesystemCapability?.detail ?? "Filesystem watching is unavailable.",
+          );
+        }
+        return this.filesystemWatchManager.list();
+      }
+      case "filesystem.watch.start": {
+        const filesystemCapability = this.capabilitiesProvider().find((capability) => capability.id === "filesystem-watch");
+        if (filesystemCapability?.state !== "ready") {
+          throw new DesktopAgentProtocolError(
+            "DESKTOP_FILESYSTEM_WATCH_UNAVAILABLE",
+            filesystemCapability?.detail ?? "Filesystem watching is unavailable.",
+          );
+        }
+        return this.filesystemWatchManager.start(request.params.path, request.params.recursive);
+      }
+      case "filesystem.watch.stop": {
+        const filesystemCapability = this.capabilitiesProvider().find((capability) => capability.id === "filesystem-watch");
+        if (filesystemCapability?.state !== "ready") {
+          throw new DesktopAgentProtocolError(
+            "DESKTOP_FILESYSTEM_WATCH_UNAVAILABLE",
+            filesystemCapability?.detail ?? "Filesystem watching is unavailable.",
+          );
+        }
+        return this.filesystemWatchManager.stop(request.params.id);
+      }
       case "trace.correlate": {
         const tracingCapability = this.capabilitiesProvider().find((capability) => capability.id === "tracing");
         if (tracingCapability?.state !== "ready") {
@@ -699,6 +754,7 @@ export class DesktopAgentDaemon {
 
 export function defaultDesktopCapabilities(
   permissions: DesktopPermissionPolicy = defaultDesktopPermissionPolicy(),
+  allowedRoots: string[] = [],
 ): DesktopCapabilityStatus[] {
   const windowsReady = kdeWindowAwarenessAvailable();
   const displaysReady = kdeDisplayAwarenessAvailable();
@@ -715,6 +771,7 @@ export function defaultDesktopCapabilities(
   const notificationsReady = linuxNotificationAwarenessAvailable();
   const notificationActionsReady = linuxNotificationControlAvailable();
   const virtualDesktopsReady = kdeVirtualDesktopAwarenessAvailable();
+  const filesystemWatchReady = linuxFilesystemWatchAvailable(allowedRoots);
   const eventsSourceReady = (
     (desktopPermissionGranted(permissions, "windows") && windowsReady)
     || (desktopPermissionGranted(permissions, "displays") && displaysReady)
@@ -724,6 +781,7 @@ export function defaultDesktopCapabilities(
     || (desktopPermissionGranted(permissions, "network") && networkReady)
     || (desktopPermissionGranted(permissions, "notifications") && notificationsReady)
     || (desktopPermissionGranted(permissions, "virtual-desktops") && virtualDesktopsReady)
+    || (desktopPermissionGranted(permissions, "filesystem-watch") && filesystemWatchReady)
   );
   const eventsReady = desktopPermissionGranted(permissions, "events") && eventsSourceReady;
   const tracingReady = desktopPermissionGranted(permissions, "tracing")
@@ -768,6 +826,9 @@ export function defaultDesktopCapabilities(
       "Linux iproute2 network inventory is unavailable"),
     permissionAwareCapability(permissions, "virtual-desktops", virtualDesktopsReady,
       "Read-only KDE virtual desktop list and current desktop state", "KDE virtual desktop manager is unavailable"),
+    permissionAwareCapability(permissions, "filesystem-watch", filesystemWatchReady,
+      "Explicit watchers limited to configured DevSpace allowed roots; emits path metadata only and never reads file contents",
+      "Filesystem watching requires at least one configured allowed root"),
     permissionAwareCapability(permissions, "logs", logsReady,
       "Explicit-source bounded reads from the Linux user journal; no arbitrary filesystem paths",
       "Linux user journal is unavailable"),
@@ -779,7 +840,7 @@ export function defaultDesktopCapabilities(
     !desktopPermissionGranted(permissions, "events")
       ? disabledCapability("events")
       : eventsReady
-        ? { id: "events", state: "ready", detail: "Bounded in-memory process/window/display/audio/device/network/notification/virtual-desktop activity timeline" }
+        ? { id: "events", state: "ready", detail: "Bounded in-memory process/window/filesystem/display/audio/device/network/notification/virtual-desktop activity timeline" }
         : { id: "events", state: "unavailable", detail: "No permitted activity sources are available" },
   ];
 }
@@ -804,6 +865,9 @@ function permissionForDesktopMethod(method: DesktopAgentRequest["method"]): Desk
     case "logs.read": return "logs";
     case "notifications.recent": return "notifications";
     case "notifications.perform": return "notification-actions";
+    case "filesystem.watch.list":
+    case "filesystem.watch.start":
+    case "filesystem.watch.stop": return "filesystem-watch";
     case "trace.correlate": return "tracing";
     default: return undefined;
   }
