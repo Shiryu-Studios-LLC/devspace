@@ -46,14 +46,18 @@ test("filesystem watcher emits metadata-only create/change/delete events and deb
 
   now += 100;
   listener!("change", "output.png");
-  assert.equal(events.at(-1)?.type, "changed");
+  assert.deepEqual(events.map((event) => event.type), ["created"], "initial content write should coalesce into create");
+
+  now += 200;
+  listener!("change", "output.png");
+  assert.equal(events.at(-1)?.type, "changed", "a later modification should still emit changed");
 
   await unlink(file);
   now += 100;
   listener!("rename", "output.png");
   assert.equal(events.at(-1)?.type, "deleted");
   assert.equal(manager.list()[0]?.eventCount, 3);
-  assert.equal(manager.list()[0]?.lastEventAt, "2026-09-20T12:00:00.200Z");
+  assert.equal(manager.list()[0]?.lastEventAt, "2026-09-20T12:00:00.400Z");
 
   const stopped = manager.stop(info.id);
   assert.equal(stopped.id, info.id);

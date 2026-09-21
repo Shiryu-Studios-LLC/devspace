@@ -6,6 +6,7 @@ import type { DesktopFilesystemWatchInfo } from "./desktop-agent-protocol.js";
 
 const DEFAULT_MAX_WATCHES = 32;
 const EVENT_DEBOUNCE_MS = 75;
+const CREATE_CHANGE_COALESCE_MS = 250;
 
 export type DesktopFilesystemChangeType = "created" | "changed" | "deleted";
 
@@ -144,6 +145,10 @@ export class LinuxFilesystemWatchManager implements DesktopFilesystemWatchManage
     const eventKey = `${type}:${candidate}`;
     const lastAt = record.recentEvents.get(eventKey);
     if (lastAt !== undefined && now - lastAt < EVENT_DEBOUNCE_MS) return;
+    if (type === "changed") {
+      const createdAt = record.recentEvents.get(`created:${candidate}`);
+      if (createdAt !== undefined && now - createdAt < CREATE_CHANGE_COALESCE_MS) return;
+    }
     record.recentEvents.set(eventKey, now);
     for (const [key, timestamp] of record.recentEvents) {
       if (now - timestamp > 5_000) record.recentEvents.delete(key);
