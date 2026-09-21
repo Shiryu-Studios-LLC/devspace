@@ -74,6 +74,7 @@ import {
   type DesktopLogReadResult,
   type DesktopLogSource,
   type DesktopTraceCorrelation,
+  type DesktopShiryuGenGenerationTrace,
   type DesktopProcessInfo,
   type DesktopScreenCapture,
   type DesktopScreenCaptureRequest,
@@ -125,6 +126,11 @@ import {
   linuxFilesystemWatchAvailable,
   type DesktopFilesystemWatchManager,
 } from "./desktop-filesystem-watch.js";
+import {
+  createShiryuGenTraceProvider,
+  shiryuGenTraceAvailable,
+  type ShiryuGenTraceProvider,
+} from "./desktop-shiryugen-trace.js";
 
 const MAX_REQUEST_BYTES = 128 * 1024;
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -156,6 +162,7 @@ export interface DesktopAgentDaemonOptions {
   notificationControl?: (request: DesktopNotificationControlRequest) => Promise<DesktopNotificationControlResult>;
   allowedRoots?: string[];
   filesystemWatchManager?: DesktopFilesystemWatchManager;
+  shiryuGenTrace?: ShiryuGenTraceProvider;
   activityMonitor?: DesktopActivityMonitor;
   focusMonitor?: DesktopFocusMonitor;
   now?: () => number;
@@ -189,6 +196,7 @@ export class DesktopAgentDaemon {
   private readonly notificationControlProvider: (request: DesktopNotificationControlRequest) => Promise<DesktopNotificationControlResult>;
   private readonly allowedRoots: string[];
   private readonly filesystemWatchManager: DesktopFilesystemWatchManager;
+  private readonly shiryuGenTraceProvider: ShiryuGenTraceProvider;
   private readonly activityMonitor: DesktopActivityMonitor;
   private readonly focusMonitor: DesktopFocusMonitor;
   private readonly now: () => number;
@@ -230,6 +238,7 @@ export class DesktopAgentDaemon {
       () => this.notificationMonitor?.recent() ?? [],
       { now: options.now },
     );
+    this.shiryuGenTraceProvider = options.shiryuGenTrace ?? createShiryuGenTraceProvider({ allowedRoots: this.allowedRoots });
     this.activityMonitor = options.activityMonitor ?? new DesktopActivityMonitor({
       windows: () => this.permissionAware("windows", this.windowsProvider),
       displays: () => this.permissionAware("displays", this.displaysProvider),
@@ -735,6 +744,29 @@ export class DesktopAgentDaemon {
         };
         return result;
       }
+      case "apps.shiryugen.trace": {
+        const capability = this.capabilitiesProvider().find((item) => item.id === "apps-shiryugen-trace");
+        if (capability?.state !== "ready") {
+          throw new DesktopAgentProtocolError(
+            "DESKTOP_SHIRYUGEN_TRACE_UNAVAILABLE",
+            capability?.detail ?? "ShiryuGen generation tracing is unavailable.",
+          );
+        }
+        const trace = await this.shiryuGenTraceProvider(request.params.traceId);
+        if (!trace.found || trace.relatedPaths.length === 0) return trace;
+        const started = trace.startedAt ? Date.parse(trace.startedAt) : Number.NEGATIVE_INFINITY;
+        const ended = trace.endedAt ? Date.parse(trace.endedAt) + 2_000 : Number.POSITIVE_INFINITY;
+        const related = new Set(trace.relatedPaths);
+        const filesystemEvents = this.activityMonitor.recent(1_000).filter((event) => (
+          event.sourceModule === "filesystem"
+          && typeof event.title === "string"
+          && related.has(event.title)
+          && Date.parse(event.timestamp) >= started
+          && Date.parse(event.timestamp) <= ended
+        ));
+        const result: DesktopShiryuGenGenerationTrace = { ...trace, filesystemEvents };
+        return result;
+      }
       case "desktop.stop":
         this.stopping = true;
         return this.status();
@@ -789,6 +821,7 @@ export function defaultDesktopCapabilities(
   const notificationActionsReady = linuxNotificationControlAvailable();
   const virtualDesktopsReady = kdeVirtualDesktopAwarenessAvailable();
   const filesystemWatchReady = linuxFilesystemWatchAvailable(allowedRoots);
+  const shiryuGenTraceReady = shiryuGenTraceAvailable(allowedRoots);
   const eventsSourceReady = (
     (desktopPermissionGranted(permissions, "windows") && windowsReady)
     || (desktopPermissionGranted(permissions, "displays") && displaysReady)
@@ -852,6 +885,11 @@ export function defaultDesktopCapabilities(
     permissionAwareCapability(permissions, "filesystem-watch", filesystemWatchReady,
       "Explicit watchers limited to configured DevSpace allowed roots; emits path metadata only and never reads file contents",
       "Filesystem watching requires at least one configured allowed root"),
+    !desktopPermissionGranted(permissions, "tracing")
+      ? { id: "apps-shiryugen-trace", state: "disabled", detail: "Disabled by tracing permission" }
+      : shiryuGenTraceReady
+        ? { id: "apps-shiryugen-trace", state: "ready", detail: "Read-only ShiryuGen generation-stage correlation from bounded local server.trace.ndjson files; prompt text is excluded" }
+        : { id: "apps-shiryugen-trace", state: "unavailable", detail: "No allowed ShiryuGen server.trace.ndjson source is available" },
     permissionAwareCapability(permissions, "logs", logsReady,
       "Explicit-source bounded reads from the Linux user journal; no arbitrary filesystem paths",
       "Linux user journal is unavailable"),
@@ -892,7 +930,8 @@ function permissionForDesktopMethod(method: DesktopAgentRequest["method"]): Desk
     case "filesystem.watch.list":
     case "filesystem.watch.start":
     case "filesystem.watch.stop": return "filesystem-watch";
-    case "trace.correlate": return "tracing";
+    case "trace.correlate":
+    case "apps.shiryugen.trace": return "tracing";
     default: return undefined;
   }
 }

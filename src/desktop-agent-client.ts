@@ -28,6 +28,7 @@ import {
   decodeDesktopLogReadResult,
   decodeDesktopLogSources,
   decodeDesktopTraceCorrelation,
+  decodeDesktopShiryuGenGenerationTrace,
   decodeDesktopProcessList,
   decodeDesktopScreenCapture,
   decodeDesktopClipboardReadResult,
@@ -57,6 +58,7 @@ import {
   type DesktopLogReadResult,
   type DesktopLogSource,
   type DesktopTraceCorrelation,
+  type DesktopShiryuGenGenerationTrace,
   type DesktopProcessInfo,
   type DesktopScreenCapture,
   type DesktopScreenCaptureRequest,
@@ -214,6 +216,12 @@ export class DesktopAgentClient {
       correlationId,
       ...(options.lines === undefined ? {} : { lines: options.lines }),
       ...(options.query === undefined ? {} : { query: options.query }),
+    }));
+  }
+
+  async shiryuGenTrace(traceId?: string): Promise<DesktopShiryuGenGenerationTrace> {
+    return decodeDesktopShiryuGenGenerationTrace(await this.requestReady("apps.shiryugen.trace", {
+      ...(traceId === undefined ? {} : { traceId }),
     }));
   }
 

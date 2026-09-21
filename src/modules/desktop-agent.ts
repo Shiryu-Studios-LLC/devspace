@@ -24,6 +24,7 @@ import type {
   DesktopLogReadResult,
   DesktopLogSource,
   DesktopTraceCorrelation,
+  DesktopShiryuGenGenerationTrace,
   DesktopProcessInfo,
   DesktopScreenCapture,
   DesktopClipboardReadResult,
@@ -1488,6 +1489,104 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
 
   registerAppTool(
     server,
+    "desktop_shiryugen_generation_trace",
+    {
+      title: "ShiryuGen Generation Trace",
+      description:
+        "Read one bounded ShiryuGen image-generation trace from its durable local server.trace.ndjson spans. Omit traceId to resolve the most recent generation. Returns stage timing, ComfyUI prompt/progress identifiers, renderer/output metadata, attachment persistence, and matching filesystem events when observed. Raw prompt text is intentionally excluded.",
+      inputSchema: {
+        traceId: z.string().regex(/^shiryugen-(?:generate|regenerate|edit)-[A-Za-z0-9._:-]+$/).max(256).optional(),
+      },
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        trace: z.object({
+          traceId: z.string().optional(),
+          found: z.boolean(),
+          action: z.enum(["generate", "regenerate", "edit"]).optional(),
+          state: z.enum(["not-found", "in-progress", "completed", "failed"]),
+          startedAt: z.string().optional(),
+          endedAt: z.string().optional(),
+          durationMs: z.number().nonnegative().optional(),
+          promptId: z.string().optional(),
+          outputPath: z.string().optional(),
+          durablePath: z.string().optional(),
+          attachmentId: z.string().optional(),
+          relatedPaths: z.array(z.string()),
+          stages: z.array(z.object({
+            stage: z.string(),
+            spanName: z.string(),
+            action: z.enum(["generate", "regenerate", "edit"]).optional(),
+            startedAt: z.string(),
+            endedAt: z.string(),
+            durationMs: z.number().nonnegative(),
+            outcome: z.enum(["ok", "error"]),
+            details: z.object({
+              endpoint: z.string().optional(),
+              nodeCount: z.number().optional(),
+              promptId: z.string().optional(),
+              pollAttempt: z.number().optional(),
+              state: z.string().optional(),
+              outputPath: z.string().optional(),
+              seed: z.number().optional(),
+              width: z.number().optional(),
+              height: z.number().optional(),
+              steps: z.number().optional(),
+              guidance: z.number().optional(),
+              engine: z.string().optional(),
+              checkpoint: z.string().optional(),
+              attachmentId: z.string().optional(),
+              durablePath: z.string().optional(),
+              generatorOutputPath: z.string().optional(),
+              sizeBytes: z.number().optional(),
+              reason: z.string().optional(),
+              missingNodes: z.array(z.string()).optional(),
+              character: z.string().optional(),
+              sceneMode: z.string().optional(),
+              modelProfile: z.string().optional(),
+              policyVersion: z.string().optional(),
+              formatterModel: z.string().optional(),
+              formatterFallback: z.boolean().optional(),
+              promptSource: z.string().optional(),
+            }),
+            sourceFile: z.string(),
+          })),
+          filesystemEvents: z.array(z.object({
+            sequence: z.number().int(),
+            timestamp: z.string(),
+            type: z.string(),
+            sourceModule: z.string(),
+            entityId: z.string(),
+            correlationId: z.string(),
+            applicationId: z.string().optional(),
+            pid: z.number().int().optional(),
+            title: z.string().optional(),
+            summary: z.string(),
+          })),
+          sourceFiles: z.array(z.string()),
+          recordsScanned: z.number().int().nonnegative(),
+          bytesScanned: z.number().int().nonnegative(),
+        }).optional(),
+      },
+      _meta: {},
+      annotations: readAnnotations,
+    },
+    async ({ traceId }) => {
+      try {
+        const trace = await client.shiryuGenTrace(traceId);
+        const result = formatShiryuGenTraceSummary(trace);
+        return {
+          content: [{ type: "text" as const, text: result }],
+          structuredContent: { status: "ready" as const, result, trace },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
     "desktop_agent_stop",
     {
       title: "Stop Desktop Agent",
@@ -1617,6 +1716,15 @@ function formatNotificationSummary(notifications: DesktopNotificationInfo[]): st
 
 function formatTraceSummary(trace: DesktopTraceCorrelation): string {
   return `Trace ${trace.correlationId}: ${trace.events.length} activity event(s), ${trace.logs?.entries.length ?? 0} correlated journal entr${trace.logs?.entries.length === 1 ? "y" : "ies"}.`;
+}
+
+function formatShiryuGenTraceSummary(trace: DesktopShiryuGenGenerationTrace): string {
+  if (!trace.found) {
+    return trace.traceId
+      ? `No retained ShiryuGen generation trace was found for ${trace.traceId}.`
+      : "No retained ShiryuGen generation trace was found in the bounded local trace history.";
+  }
+  return `ShiryuGen ${trace.action ?? "generation"} trace ${trace.traceId ?? "(unknown)"}: ${trace.state}, ${trace.stages.length} stage(s), ComfyUI prompt ${trace.promptId ?? "not observed"}, ${trace.filesystemEvents.length} matching filesystem event(s).`;
 }
 
 function formatLogReadSummary(logs: DesktopLogReadResult): string {

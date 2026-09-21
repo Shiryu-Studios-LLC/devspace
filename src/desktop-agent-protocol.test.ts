@@ -22,6 +22,7 @@ import {
   decodeDesktopLogReadResult,
   decodeDesktopLogSources,
   decodeDesktopTraceCorrelation,
+  decodeDesktopShiryuGenGenerationTrace,
   decodeDesktopProcessList,
   decodeDesktopScreenCapture,
   decodeDesktopClipboardReadResult,
@@ -333,6 +334,25 @@ test("desktop agent accepts correlation requests", () => {
     params: { correlationId: "pid:9460", lines: 50, query: "http_request" },
   };
   assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(request))), request);
+});
+
+test("desktop agent accepts bounded ShiryuGen generation trace requests", () => {
+  const latest: DesktopAgentRequest = {
+    requestId: "request-shiryugen-latest",
+    protocolVersion: DESKTOP_AGENT_PROTOCOL_VERSION,
+    authToken: "a".repeat(64),
+    method: "apps.shiryugen.trace",
+    params: {},
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(latest))), latest);
+  const exact: DesktopAgentRequest = {
+    ...latest,
+    requestId: "request-shiryugen-exact",
+    params: { traceId: "shiryugen-generate-abc-123" },
+  };
+  assert.deepEqual(decodeDesktopAgentRequest(JSON.parse(encodeDesktopAgentRequest(exact))), exact);
+  assert.throws(() => decodeDesktopAgentRequest({ ...exact, params: { traceId: "/tmp/server.trace.ndjson" } }), /valid ShiryuGen generation trace identifier/);
+  assert.throws(() => decodeDesktopAgentRequest({ ...exact, params: { traceId: "shiryugen-generate-ok", path: "/tmp/x" } }), /unknown parameters/);
 });
 
 test("desktop agent accepts the recent notifications method", () => {
@@ -918,6 +938,42 @@ test("desktop agent decodes correlated activity and journal entries", () => {
   });
   assert.equal(trace.events[0]?.correlationId, "pid:9460");
   assert.equal(trace.logs?.entries[0]?.pid, 9460);
+});
+
+test("desktop agent decodes a bounded ShiryuGen generation trace", () => {
+  const trace = decodeDesktopShiryuGenGenerationTrace({
+    traceId: "shiryugen-generate-abc-123",
+    found: true,
+    action: "generate",
+    state: "completed",
+    startedAt: "2026-09-20T12:00:00.000Z",
+    endedAt: "2026-09-20T12:00:05.000Z",
+    durationMs: 5000,
+    promptId: "prompt-abc",
+    outputPath: "/tmp/generated.png",
+    durablePath: "/tmp/attachments/generated.png",
+    attachmentId: "generated-image-1",
+    relatedPaths: ["/tmp/generated.png", "/tmp/attachments/generated.png"],
+    stages: [{
+      stage: "comfyui.queued",
+      spanName: "shiryugen.generation.comfyui.queued",
+      action: "generate",
+      startedAt: "2026-09-20T12:00:01.000Z",
+      endedAt: "2026-09-20T12:00:01.005Z",
+      durationMs: 5,
+      outcome: "ok",
+      details: { promptId: "prompt-abc", pollAttempt: 1, formatterFallback: false },
+      sourceFile: "/home/okashi/.t3/userdata/logs/server.trace.ndjson",
+    }],
+    filesystemEvents: [],
+    sourceFiles: ["/home/okashi/.t3/userdata/logs/server.trace.ndjson"],
+    recordsScanned: 42,
+    bytesScanned: 4096,
+  });
+  assert.equal(trace.promptId, "prompt-abc");
+  assert.equal(trace.stages[0]?.details.pollAttempt, 1);
+  assert.equal(trace.stages[0]?.details.formatterFallback, false);
+  assert.throws(() => decodeDesktopShiryuGenGenerationTrace({ ...trace, state: "mystery" }), /Invalid ShiryuGen trace state/);
 });
 
 test("desktop agent response and status decode capability states", () => {

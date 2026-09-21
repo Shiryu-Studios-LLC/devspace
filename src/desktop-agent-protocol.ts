@@ -519,6 +519,67 @@ export interface DesktopTraceCorrelation {
   logs?: DesktopLogReadResult;
 }
 
+export interface DesktopShiryuGenTraceDetails {
+  endpoint?: string;
+  nodeCount?: number;
+  promptId?: string;
+  pollAttempt?: number;
+  state?: string;
+  outputPath?: string;
+  seed?: number;
+  width?: number;
+  height?: number;
+  steps?: number;
+  guidance?: number;
+  engine?: string;
+  checkpoint?: string;
+  attachmentId?: string;
+  durablePath?: string;
+  generatorOutputPath?: string;
+  sizeBytes?: number;
+  reason?: string;
+  missingNodes?: string[];
+  character?: string;
+  sceneMode?: string;
+  modelProfile?: string;
+  policyVersion?: string;
+  formatterModel?: string;
+  formatterFallback?: boolean;
+  promptSource?: string;
+}
+
+export interface DesktopShiryuGenTraceStage {
+  stage: string;
+  spanName: string;
+  action?: "generate" | "regenerate" | "edit";
+  startedAt: string;
+  endedAt: string;
+  durationMs: number;
+  outcome: "ok" | "error";
+  details: DesktopShiryuGenTraceDetails;
+  sourceFile: string;
+}
+
+export interface DesktopShiryuGenGenerationTrace {
+  traceId?: string;
+  found: boolean;
+  action?: "generate" | "regenerate" | "edit";
+  state: "not-found" | "in-progress" | "completed" | "failed";
+  startedAt?: string;
+  endedAt?: string;
+  durationMs?: number;
+  promptId?: string;
+  outputPath?: string;
+  durablePath?: string;
+  attachmentId?: string;
+  relatedPaths: string[];
+  stages: DesktopShiryuGenTraceStage[];
+  filesystemEvents: DesktopActivityEvent[];
+  sourceFiles: string[];
+  recordsScanned: number;
+  bytesScanned: number;
+}
+
 export interface DesktopNotificationInfo {
   id: string;
   notificationId?: number;
@@ -578,6 +639,7 @@ export type DesktopAgentMethod =
   | "logs.sources"
   | "logs.read"
   | "trace.correlate"
+  | "apps.shiryugen.trace"
   | "notifications.recent"
   | "notifications.perform"
   | "filesystem.watch.list"
@@ -597,7 +659,7 @@ type DesktopAgentRequestBase = {
   authToken: string;
 };
 
-type DesktopAgentNoParamsMethod = Exclude<DesktopAgentMethod, "logs.read" | "trace.correlate" | "screen.capture" | "clipboard.write" | "accessibility.snapshot" | "accessibility.action" | "input.perform" | "notifications.perform" | "filesystem.watch.start" | "filesystem.watch.stop">;
+type DesktopAgentNoParamsMethod = Exclude<DesktopAgentMethod, "logs.read" | "trace.correlate" | "apps.shiryugen.trace" | "screen.capture" | "clipboard.write" | "accessibility.snapshot" | "accessibility.action" | "input.perform" | "notifications.perform" | "filesystem.watch.start" | "filesystem.watch.stop">;
 
 export type DesktopAgentRequest = DesktopAgentRequestBase & (
   | {
@@ -619,6 +681,10 @@ export type DesktopAgentRequest = DesktopAgentRequestBase & (
         lines?: number;
         query?: string;
       };
+    }
+  | {
+      method: "apps.shiryugen.trace";
+      params: { traceId?: string };
     }
   | {
       method: "screen.capture";
@@ -736,6 +802,23 @@ export function decodeDesktopAgentRequest(value: unknown): DesktopAgentRequest {
       authToken,
       method,
       params: { correlationId, ...(lines === undefined ? {} : { lines }), ...(query === undefined ? {} : { query }) },
+    };
+  }
+  if (method === "apps.shiryugen.trace") {
+    const allowed = new Set(["traceId"]);
+    if (Object.keys(params).some((key) => !allowed.has(key))) {
+      throw new DesktopAgentProtocolError("INVALID_PARAMS", "apps.shiryugen.trace received unknown parameters.");
+    }
+    const traceId = params.traceId === undefined ? undefined : requiredString(params.traceId, "shiryugen.traceId");
+    if (traceId !== undefined && (!/^shiryugen-(?:generate|regenerate|edit)-[A-Za-z0-9._:-]+$/.test(traceId) || traceId.length > 256)) {
+      throw new DesktopAgentProtocolError("INVALID_PARAMS", "shiryugen.traceId must be a valid ShiryuGen generation trace identifier.");
+    }
+    return {
+      requestId,
+      protocolVersion,
+      authToken,
+      method,
+      params: traceId === undefined ? {} : { traceId },
     };
   }
   if (method === "accessibility.snapshot") {
@@ -1399,6 +1482,119 @@ export function decodeDesktopTraceCorrelation(value: unknown): DesktopTraceCorre
   };
 }
 
+export function decodeDesktopShiryuGenGenerationTrace(value: unknown): DesktopShiryuGenGenerationTrace {
+  const record = asRecord(value);
+  if (!record || !Array.isArray(record.relatedPaths) || !Array.isArray(record.stages) || !Array.isArray(record.filesystemEvents) || !Array.isArray(record.sourceFiles)) {
+    throw new DesktopAgentProtocolError("INVALID_SHIRYUGEN_TRACE", "Desktop agent returned an invalid ShiryuGen generation trace.");
+  }
+  const state = requiredString(record.state, "shiryugen.state") as DesktopShiryuGenGenerationTrace["state"];
+  if (state !== "not-found" && state !== "in-progress" && state !== "completed" && state !== "failed") {
+    throw new DesktopAgentProtocolError("INVALID_SHIRYUGEN_TRACE", `Invalid ShiryuGen trace state: ${state}`);
+  }
+  const action = record.action === undefined ? undefined : decodeShiryuGenAction(record.action, "shiryugen.action");
+  const durationMs = optionalNumber(record.durationMs);
+  const recordsScanned = requiredInteger(record.recordsScanned, "shiryugen.recordsScanned");
+  const bytesScanned = requiredInteger(record.bytesScanned, "shiryugen.bytesScanned");
+  if ((durationMs !== undefined && durationMs < 0) || recordsScanned < 0 || bytesScanned < 0) {
+    throw new DesktopAgentProtocolError("INVALID_SHIRYUGEN_TRACE", "ShiryuGen trace counters and duration must be non-negative.");
+  }
+  return {
+    ...(record.traceId === undefined ? {} : { traceId: requiredString(record.traceId, "shiryugen.traceId") }),
+    found: requiredBoolean(record.found, "shiryugen.found"),
+    ...(action === undefined ? {} : { action }),
+    state,
+    ...(record.startedAt === undefined ? {} : { startedAt: requiredString(record.startedAt, "shiryugen.startedAt") }),
+    ...(record.endedAt === undefined ? {} : { endedAt: requiredString(record.endedAt, "shiryugen.endedAt") }),
+    ...(durationMs === undefined ? {} : { durationMs }),
+    ...(record.promptId === undefined ? {} : { promptId: requiredString(record.promptId, "shiryugen.promptId") }),
+    ...(record.outputPath === undefined ? {} : { outputPath: requiredString(record.outputPath, "shiryugen.outputPath") }),
+    ...(record.durablePath === undefined ? {} : { durablePath: requiredString(record.durablePath, "shiryugen.durablePath") }),
+    ...(record.attachmentId === undefined ? {} : { attachmentId: requiredString(record.attachmentId, "shiryugen.attachmentId") }),
+    relatedPaths: stringArray(record.relatedPaths, "shiryugen.relatedPaths"),
+    stages: record.stages.map(decodeDesktopShiryuGenTraceStage),
+    filesystemEvents: record.filesystemEvents.map(decodeDesktopActivityEvent),
+    sourceFiles: stringArray(record.sourceFiles, "shiryugen.sourceFiles"),
+    recordsScanned,
+    bytesScanned,
+  };
+}
+
+function decodeDesktopShiryuGenTraceStage(value: unknown): DesktopShiryuGenTraceStage {
+  const record = asRecord(value);
+  if (!record) throw new DesktopAgentProtocolError("INVALID_SHIRYUGEN_TRACE", "ShiryuGen trace stage must be an object.");
+  const action = record.action === undefined ? undefined : decodeShiryuGenAction(record.action, "shiryugen.stage.action");
+  const outcome = requiredString(record.outcome, "shiryugen.stage.outcome");
+  if (outcome !== "ok" && outcome !== "error") {
+    throw new DesktopAgentProtocolError("INVALID_SHIRYUGEN_TRACE", `Invalid ShiryuGen stage outcome: ${outcome}`);
+  }
+  const durationMs = requiredNumber(record.durationMs, "shiryugen.stage.durationMs");
+  if (durationMs < 0) throw new DesktopAgentProtocolError("INVALID_SHIRYUGEN_TRACE", "ShiryuGen stage duration must be non-negative.");
+  return {
+    stage: requiredString(record.stage, "shiryugen.stage.stage"),
+    spanName: requiredString(record.spanName, "shiryugen.stage.spanName"),
+    ...(action === undefined ? {} : { action }),
+    startedAt: requiredString(record.startedAt, "shiryugen.stage.startedAt"),
+    endedAt: requiredString(record.endedAt, "shiryugen.stage.endedAt"),
+    durationMs,
+    outcome,
+    details: decodeDesktopShiryuGenTraceDetails(record.details),
+    sourceFile: requiredString(record.sourceFile, "shiryugen.stage.sourceFile"),
+  };
+}
+
+function decodeDesktopShiryuGenTraceDetails(value: unknown): DesktopShiryuGenTraceDetails {
+  const record = asRecord(value);
+  if (!record) throw new DesktopAgentProtocolError("INVALID_SHIRYUGEN_TRACE", "ShiryuGen trace details must be an object.");
+  const integer = (key: string) => record[key] === undefined ? undefined : requiredInteger(record[key], `shiryugen.details.${key}`);
+  const number = (key: string) => record[key] === undefined ? undefined : requiredNumber(record[key], `shiryugen.details.${key}`);
+  const string = (key: string) => record[key] === undefined ? undefined : requiredString(record[key], `shiryugen.details.${key}`);
+  const boolean = (key: string) => record[key] === undefined ? undefined : requiredBoolean(record[key], `shiryugen.details.${key}`);
+  const nodeCount = integer("nodeCount");
+  const pollAttempt = integer("pollAttempt");
+  const seed = number("seed");
+  const width = integer("width");
+  const height = integer("height");
+  const steps = integer("steps");
+  const guidance = number("guidance");
+  const sizeBytes = integer("sizeBytes");
+  return {
+    ...(string("endpoint") === undefined ? {} : { endpoint: string("endpoint")! }),
+    ...(nodeCount === undefined ? {} : { nodeCount }),
+    ...(string("promptId") === undefined ? {} : { promptId: string("promptId")! }),
+    ...(pollAttempt === undefined ? {} : { pollAttempt }),
+    ...(string("state") === undefined ? {} : { state: string("state")! }),
+    ...(string("outputPath") === undefined ? {} : { outputPath: string("outputPath")! }),
+    ...(seed === undefined ? {} : { seed }),
+    ...(width === undefined ? {} : { width }),
+    ...(height === undefined ? {} : { height }),
+    ...(steps === undefined ? {} : { steps }),
+    ...(guidance === undefined ? {} : { guidance }),
+    ...(string("engine") === undefined ? {} : { engine: string("engine")! }),
+    ...(string("checkpoint") === undefined ? {} : { checkpoint: string("checkpoint")! }),
+    ...(string("attachmentId") === undefined ? {} : { attachmentId: string("attachmentId")! }),
+    ...(string("durablePath") === undefined ? {} : { durablePath: string("durablePath")! }),
+    ...(string("generatorOutputPath") === undefined ? {} : { generatorOutputPath: string("generatorOutputPath")! }),
+    ...(sizeBytes === undefined ? {} : { sizeBytes }),
+    ...(string("reason") === undefined ? {} : { reason: string("reason")! }),
+    ...(record.missingNodes === undefined ? {} : { missingNodes: stringArray(record.missingNodes, "shiryugen.details.missingNodes") }),
+    ...(string("character") === undefined ? {} : { character: string("character")! }),
+    ...(string("sceneMode") === undefined ? {} : { sceneMode: string("sceneMode")! }),
+    ...(string("modelProfile") === undefined ? {} : { modelProfile: string("modelProfile")! }),
+    ...(string("policyVersion") === undefined ? {} : { policyVersion: string("policyVersion")! }),
+    ...(string("formatterModel") === undefined ? {} : { formatterModel: string("formatterModel")! }),
+    ...(boolean("formatterFallback") === undefined ? {} : { formatterFallback: boolean("formatterFallback")! }),
+    ...(string("promptSource") === undefined ? {} : { promptSource: string("promptSource")! }),
+  };
+}
+
+function decodeShiryuGenAction(value: unknown, field: string): "generate" | "regenerate" | "edit" {
+  const action = requiredString(value, field);
+  if (action !== "generate" && action !== "regenerate" && action !== "edit") {
+    throw new DesktopAgentProtocolError("INVALID_SHIRYUGEN_TRACE", `Invalid ShiryuGen generation action: ${action}`);
+  }
+  return action;
+}
+
 export function decodeDesktopNotificationList(value: unknown): DesktopNotificationInfo[] {
   if (!Array.isArray(value)) {
     throw new DesktopAgentProtocolError("INVALID_NOTIFICATIONS", "Desktop agent returned an invalid notification list.");
@@ -1893,6 +2089,7 @@ function isDesktopAgentMethod(value: string): value is DesktopAgentMethod {
     || value === "logs.sources"
     || value === "logs.read"
     || value === "trace.correlate"
+    || value === "apps.shiryugen.trace"
     || value === "notifications.recent"
     || value === "notifications.perform"
     || value === "filesystem.watch.list"

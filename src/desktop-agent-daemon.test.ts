@@ -1117,6 +1117,72 @@ test("desktop agent serves explicit bounded log sources and reads", async (t) =>
   assert.deepEqual(await client.readLogs(expectedSources[0]!.id, { lines: 25, query: "tool_call" }), expectedLogs);
 });
 
+test("desktop agent serves ShiryuGen generation traces and correlates observed output files", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-shiryugen-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const outputPath = "/tmp/generated_images/kashiro.png";
+  const eventTime = Date.parse("2026-09-20T12:00:05.100Z");
+  const monitor = new DesktopActivityMonitor({
+    windows: async () => [],
+    processes: async () => [],
+    displays: async () => [],
+    now: () => eventTime,
+  });
+  monitor.recordFilesystemEvent({
+    watchId: "fswatch:test",
+    type: "created",
+    path: outputPath,
+    occurredAt: "2026-09-20T12:00:05.100Z",
+  });
+  let providerCalls = 0;
+  const daemon = new DesktopAgentDaemon({
+    stateDir,
+    activityMonitor: monitor,
+    capabilities: () => [{ id: "apps-shiryugen-trace", state: "ready" }],
+    shiryuGenTrace: async (traceId) => {
+      providerCalls += 1;
+      return {
+        traceId: traceId ?? "shiryugen-generate-latest",
+        found: true,
+        action: "generate",
+        state: "completed",
+        startedAt: "2026-09-20T12:00:00.000Z",
+        endedAt: "2026-09-20T12:00:05.200Z",
+        durationMs: 5200,
+        promptId: "prompt-abc",
+        outputPath,
+        relatedPaths: [outputPath],
+        stages: [],
+        filesystemEvents: [],
+        sourceFiles: ["/home/okashi/.t3/userdata/logs/server.trace.ndjson"],
+        recordsScanned: 12,
+        bytesScanned: 4096,
+      };
+    },
+  });
+  t.after(() => daemon.close());
+  await daemon.start();
+  const client = new DesktopAgentClient({
+    stateDir,
+    spawnDaemon: () => assert.fail("existing daemon should not be respawned"),
+  });
+
+  const latest = await client.shiryuGenTrace();
+  assert.equal(latest.traceId, "shiryugen-generate-latest");
+  assert.equal(latest.filesystemEvents.length, 1);
+  assert.equal(latest.filesystemEvents[0]?.title, outputPath);
+  assert.equal(providerCalls, 1);
+
+  const denied = defaultDesktopPermissionPolicy();
+  denied.tracing = false;
+  daemon.updatePermissions(denied);
+  await assert.rejects(
+    () => client.shiryuGenTrace("shiryugen-generate-exact"),
+    (error: unknown) => error instanceof DesktopAgentClientError && error.code === "DESKTOP_PERMISSION_DENIED",
+  );
+  assert.equal(providerCalls, 1, "denied tracing must not reach the ShiryuGen provider");
+});
+
 test("desktop agent client reconnects after mid-request agent loss", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "devspace-desktop-agent-reconnect-"));
   t.after(() => rm(stateDir, { recursive: true, force: true }));

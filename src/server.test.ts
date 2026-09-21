@@ -234,6 +234,7 @@ test("module status keeps core health separate from secondary modules", async (t
     "desktop_watch_filesystem",
     "desktop_unwatch_filesystem",
     "desktop_trace_correlation",
+    "desktop_shiryugen_generation_trace",
     "desktop_agent_stop",
   ]) {
     assert.equal(
