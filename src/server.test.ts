@@ -562,9 +562,13 @@ async function fixture(
     DEVSPACE_OAUTH_OWNER_TOKEN: "test-owner-token-that-is-long-enough",
     PORT: "1",
   });
+  const isolatedConfig: ServerConfig = {
+    ...loadedConfig,
+    upstreamMcpServers: [],
+  };
   const config: ServerConfig = options.localAgentProviders
     ? {
-        ...loadedConfig,
+        ...isolatedConfig,
         subagents: options.subagents ?? {
           enabled: true,
           providers: initialProviderAvailability.map((provider) => ({
@@ -573,7 +577,7 @@ async function fixture(
           })),
         },
       }
-    : loadedConfig;
+    : isolatedConfig;
   const resolveProviderAvailability: () => LocalAgentProviderAvailability[] =
     typeof options.localAgentProviders === "function"
       ? options.localAgentProviders

@@ -35,9 +35,9 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 - [x] Extract local-agent tool registration from `server.ts`.
 - [x] Extract review/checkpoint tool registration from `server.ts`.
 - [x] Keep authentication, configuration, persistence, MCP transport, and module lifecycle in core.
-- [ ] Compare the complete MCP tool/schema surface before and after extraction.
+- [x] Compare the complete MCP tool/schema surface before and after extraction; legacy tool names plus input/output schemas match the `d073d6c` pre-modularization baseline across full, minimal, and Codex modes with subagents both disabled and enabled, with a permanent compatibility regression test.
 - [x] Prove a second development build can start on a separate port with separate state while production remains healthy.
-- [ ] Run authenticated MCP end-to-end testing against a persistent second DevSpace service identity.
+- [x] Run authenticated MCP end-to-end testing against a persistent second DevSpace service identity; the isolated revamp service on port 7677 uses separate config/state, completes dynamic OAuth registration and owner approval, issues access/refresh tokens, and serves authenticated Streamable HTTP MCP while production on port 7676 remains healthy.
 
 ## Phase 0B — Desktop agent foundation
 
@@ -93,7 +93,7 @@ DevSpace core remains the primary runtime and source of truth. Optional capabili
 ## Integration modules
 
 - [x] Upstream MCP bridge tolerates offline Unity/Unreal/Blockbench servers.
-- [ ] Surface per-upstream health inside the unified module/capability status model.
+- [x] Surface per-upstream health inside the unified module/capability status model; each configured upstream reports ready/unavailable/disabled as a capability, unavailable upstreams degrade only the bridge module, and core health stays independent.
 - [ ] Add application-specific adapters only as enhancements to generic desktop awareness.
 - [x] Add an optional ShiryuGen generation-trace adapter over bounded local `server.trace.ndjson` spans, with latest/exact trace lookup, ComfyUI prompt/progress correlation, output/attachment metadata, filesystem-event enrichment, and raw prompt text excluded.
 - [ ] Keep Unreal, Unity, Blockbench, SteamVR, OBS, ShiryuAudio, ShiryuGen, and browser integrations optional.

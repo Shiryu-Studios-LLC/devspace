@@ -24,14 +24,30 @@ export interface DevSpaceModuleContext {
   incomingArtifactAdapters: readonly IncomingArtifactAdapter[];
 }
 
+export interface DevSpaceCapabilityState {
+  id: string;
+  status: DevSpaceModuleStatus;
+  detail?: string;
+  error?: string;
+}
+
+export interface DevSpaceModuleHealth {
+  status?: DevSpaceModuleStatus;
+  detail?: string;
+  capabilities?: readonly DevSpaceCapabilityState[];
+}
+
 export interface DevSpaceModule {
   id: string;
   enabled?(context: DevSpaceModuleContext): boolean;
   register(context: DevSpaceModuleContext): void;
+  health?(context: DevSpaceModuleContext): DevSpaceModuleHealth | Promise<DevSpaceModuleHealth>;
 }
 
 export interface DevSpaceModuleState {
   id: string;
   status: DevSpaceModuleStatus;
+  detail?: string;
   error?: string;
+  capabilities?: readonly DevSpaceCapabilityState[];
 }

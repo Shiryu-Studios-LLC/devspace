@@ -9,9 +9,14 @@ type RemovableRegistration = { remove(): void };
 export class DevSpaceModuleRegistry {
   private readonly states = new Map<string, DevSpaceModuleState>();
   private readonly registrations = new Map<string, RemovableRegistration[]>();
+  private readonly healthChecks = new Map<string, {
+    module: DevSpaceModule;
+    context: DevSpaceModuleContext;
+  }>();
 
   register(module: DevSpaceModule, context: DevSpaceModuleContext): DevSpaceModuleState {
     this.removeRegistrations(module.id);
+    this.healthChecks.delete(module.id);
 
     if (module.enabled && !module.enabled(context)) {
       const state: DevSpaceModuleState = { id: module.id, status: "disabled" };
@@ -28,6 +33,7 @@ export class DevSpaceModuleRegistry {
     try {
       module.register(trackedContext);
       this.registrations.set(module.id, registrations);
+      if (module.health) this.healthChecks.set(module.id, { module, context });
       const state: DevSpaceModuleState = { id: module.id, status: "ready" };
       this.states.set(module.id, state);
       return state;
@@ -57,6 +63,7 @@ export class DevSpaceModuleRegistry {
   remove(id: string): boolean {
     const existed = this.states.has(id) || this.registrations.has(id);
     this.removeRegistrations(id);
+    this.healthChecks.delete(id);
     this.states.delete(id);
     return existed;
   }
@@ -67,6 +74,31 @@ export class DevSpaceModuleRegistry {
 
   list(): DevSpaceModuleState[] {
     return [...this.states.values()];
+  }
+
+  async inspect(): Promise<DevSpaceModuleState[]> {
+    return Promise.all(this.list().map(async (state) => {
+      const check = this.healthChecks.get(state.id);
+      if (!check || state.status !== "ready") return state;
+
+      try {
+        const health = await check.module.health?.(check.context);
+        if (!health) return state;
+        return {
+          ...state,
+          ...health,
+          id: state.id,
+          status: health.status ?? state.status,
+          capabilities: health.capabilities ? [...health.capabilities] : undefined,
+        };
+      } catch (error) {
+        return {
+          ...state,
+          status: "degraded" as const,
+          error: `Health check failed: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+    }));
   }
 
   private removeRegistrations(id: string): void {

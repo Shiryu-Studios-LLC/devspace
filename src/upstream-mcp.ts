@@ -4,12 +4,21 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import * as z from "zod/v4";
 import type { ServerConfig } from "./config.js";
+import type { DevSpaceModuleHealth } from "./modules/types.js";
 
 type Upstream = {
   name: string;
   url: URL;
   enabled: boolean;
 };
+
+export type UpstreamMcpReachabilityStatus = "ready" | "unavailable" | "disabled";
+
+export interface UpstreamMcpStatus {
+  server: string;
+  status: UpstreamMcpReachabilityStatus;
+  error?: string;
+}
 
 function configuredUpstreams(config: ServerConfig): Upstream[] {
   return config.upstreamMcpServers.flatMap((entry) => {
@@ -23,9 +32,19 @@ function configuredUpstreams(config: ServerConfig): Upstream[] {
   });
 }
 
-async function withClient<T>(upstream: Upstream, action: (client: Client) => Promise<T>): Promise<T> {
+async function withClient<T>(
+  upstream: Upstream,
+  action: (client: Client) => Promise<T>,
+  options: { timeoutMs?: number } = {},
+): Promise<T> {
   const client = new Client({ name: "devspace-upstream-bridge", version: "1.0.0" });
-  const transport = new StreamableHTTPClientTransport(upstream.url);
+  const requestInit = options.timeoutMs
+    ? { signal: AbortSignal.timeout(options.timeoutMs) }
+    : undefined;
+  const transport = new StreamableHTTPClientTransport(
+    upstream.url,
+    requestInit ? { requestInit } : undefined,
+  );
   try {
     await client.connect(transport);
     return await action(client);
@@ -36,6 +55,52 @@ async function withClient<T>(upstream: Upstream, action: (client: Client) => Pro
 
 function errorResult(message: string) {
   return { content: [{ type: "text" as const, text: message }], isError: true };
+}
+
+export async function getUpstreamMcpStatuses(
+  config: ServerConfig,
+  timeoutMs = 1_000,
+): Promise<UpstreamMcpStatus[]> {
+  const upstreams = configuredUpstreams(config);
+  return Promise.all(upstreams.map(async (upstream) => {
+    if (!upstream.enabled) return { server: upstream.name, status: "disabled" as const };
+    try {
+      await withClient(upstream, (client) => client.ping(), { timeoutMs });
+      return { server: upstream.name, status: "ready" as const };
+    } catch (error) {
+      return {
+        server: upstream.name,
+        status: "unavailable" as const,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }));
+}
+
+export function summarizeUpstreamMcpHealth(
+  statuses: readonly UpstreamMcpStatus[],
+): DevSpaceModuleHealth {
+  const unavailable = statuses.filter((status) => status.status === "unavailable").length;
+  const ready = statuses.filter((status) => status.status === "ready").length;
+  const disabled = statuses.filter((status) => status.status === "disabled").length;
+  const detail = statuses.length === 0
+    ? "No upstream MCP servers are configured."
+    : `${ready} ready, ${unavailable} unavailable, ${disabled} disabled.`;
+
+  return {
+    status: unavailable > 0 ? "degraded" : "ready",
+    detail,
+    capabilities: statuses.map((status) => ({
+      id: status.server,
+      status: status.status,
+      detail: status.status === "ready"
+        ? "Reachable."
+        : status.status === "disabled"
+          ? "Disabled by configuration."
+          : "Configured upstream MCP server is not reachable.",
+      ...(status.error ? { error: status.error } : {}),
+    })),
+  };
 }
 
 export function registerUpstreamMcpTools(server: McpServer, config: ServerConfig): void {
@@ -98,16 +163,13 @@ export function registerUpstreamMcpTools(server: McpServer, config: ServerConfig
       description: "Check whether configured local MCP servers are enabled and reachable.",
     },
     async () => {
-      const statuses = await Promise.all(upstreams.map(async (upstream) => {
-        if (!upstream.enabled) return { server: upstream.name, status: "disabled" as const };
-        try {
-          await withClient(upstream, (client) => client.ping());
-          return { server: upstream.name, status: "ready" as const };
-        } catch {
-          return { server: upstream.name, status: "unavailable" as const };
-        }
-      }));
-      return { content: [{ type: "text", text: JSON.stringify(statuses) }] };
+      const statuses = await getUpstreamMcpStatuses(config);
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify(statuses.map(({ server, status }) => ({ server, status }))),
+        }],
+      };
     },
   );
 }

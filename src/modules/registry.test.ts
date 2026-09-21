@@ -43,6 +43,55 @@ test("disabled secondary modules do not register", () => {
   assert.deepEqual(state, { id: "disabled-module", status: "disabled" });
 });
 
+test("dynamic module health enriches unified status without replacing registration state", async () => {
+  const registry = new DevSpaceModuleRegistry();
+  const registered = registry.register(
+    {
+      id: "upstream-mcp",
+      register: () => undefined,
+      health: async () => ({
+        status: "degraded",
+        detail: "0 ready, 1 unavailable, 1 disabled.",
+        capabilities: [
+          { id: "unity", status: "unavailable", detail: "Not reachable." },
+          { id: "blockbench", status: "disabled", detail: "Disabled by configuration." },
+        ],
+      }),
+    },
+    context,
+  );
+
+  assert.deepEqual(registered, { id: "upstream-mcp", status: "ready" });
+  assert.deepEqual(registry.list(), [registered]);
+  assert.deepEqual(await registry.inspect(), [{
+    id: "upstream-mcp",
+    status: "degraded",
+    detail: "0 ready, 1 unavailable, 1 disabled.",
+    capabilities: [
+      { id: "unity", status: "unavailable", detail: "Not reachable." },
+      { id: "blockbench", status: "disabled", detail: "Disabled by configuration." },
+    ],
+  }]);
+  assert.deepEqual(registry.list(), [registered]);
+});
+
+test("dynamic health failures degrade only the affected module", async () => {
+  const registry = new DevSpaceModuleRegistry();
+  registry.register({
+    id: "broken-health",
+    register: () => undefined,
+    health: async () => {
+      throw new Error("probe failed");
+    },
+  }, context);
+  registry.register({ id: "healthy", register: () => undefined }, context);
+
+  assert.deepEqual(await registry.inspect(), [
+    { id: "broken-health", status: "degraded", error: "Health check failed: probe failed" },
+    { id: "healthy", status: "ready" },
+  ]);
+});
+
 test("hot reload replaces tracked module registrations in place", () => {
   const registry = new DevSpaceModuleRegistry();
   const active = new Set<string>();

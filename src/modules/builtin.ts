@@ -6,12 +6,17 @@ import { registerDevSpaceAdminTools } from "../devspace-admin-tools.js";
 import { registerDesktopAgentTools } from "./desktop-agent.js";
 import { registerGitTools } from "../git-tools.js";
 import { registerLocalWindowsTools } from "../local-windows-tools.js";
-import { registerUpstreamMcpTools } from "../upstream-mcp.js";
+import {
+  getUpstreamMcpStatuses,
+  registerUpstreamMcpTools,
+  summarizeUpstreamMcpHealth,
+} from "../upstream-mcp.js";
 import type { DevSpaceModule } from "./types.js";
 
 export const upstreamMcpModule: DevSpaceModule = {
   id: "upstream-mcp",
   register: ({ server, config }) => registerUpstreamMcpTools(server, config),
+  health: async ({ config }) => summarizeUpstreamMcpHealth(await getUpstreamMcpStatuses(config)),
 };
 
 export const gitModule: DevSpaceModule = {

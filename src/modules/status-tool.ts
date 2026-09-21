@@ -13,7 +13,7 @@ export function registerModuleStatusTool(server: McpServer, registry: DevSpaceMo
     async () => {
       const state = {
         core: { id: "core", status: "ready" as const },
-        modules: registry.list(),
+        modules: await registry.inspect(),
       };
       return {
         content: [{ type: "text" as const, text: JSON.stringify(state) }],
