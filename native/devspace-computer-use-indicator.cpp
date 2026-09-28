@@ -56,7 +56,10 @@ public:
         auto *layer = LayerShellQt::Window::get(handle);
         layer->setScreen(screen);
         layer->setLayer(LayerShellQt::Window::LayerOverlay);
-        layer->setExclusiveZone(0);
+        // Use the physical output bounds, not Plasma's reserved work area.
+        // In layer-shell, an exclusive zone of -1 tells KWin to ignore
+        // panel/dock exclusive zones when positioning this overlay surface.
+        layer->setExclusiveZone(-1);
         layer->setKeyboardInteractivity(LayerShellQt::Window::KeyboardInteractivityNone);
         layer->setActivateOnShow(false);
         layer->setScope(QStringLiteral("devspace-computer-use-indicator"));
