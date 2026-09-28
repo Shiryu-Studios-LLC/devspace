@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
+import { promisify } from "node:util";
 import { DesktopAgentClient } from "./desktop-agent-client.js";
 import type { DesktopActivityTimeline, DesktopInputRequest, DesktopInputResult } from "./desktop-agent-protocol.js";
 
@@ -12,6 +13,7 @@ const CONTROL_TIMEOUT_MS = 5_000;
 const TAKEOVER_POLL_MS = 350;
 const MAX_CONTROL_BYTES = 128 * 1024;
 const DEFAULT_IDLE_CLEANUP_MS = 5 * 60 * 1000;
+const execFileAsync = promisify(execFile);
 
 export type ComputerUseControlOwner = "agent" | "user";
 export type ComputerUseMode = "isolated-window" | "isolated-headless" | "host-fallback";
@@ -29,6 +31,7 @@ export interface ComputerUseStatus {
   height?: number;
   startedAt?: string;
   indicatorState: ComputerUseIndicatorState;
+  viewerVisible: boolean;
   fallbackReason?: string;
 }
 
@@ -38,6 +41,7 @@ export interface ComputerUseStartOptions {
   headless?: boolean;
   allowHostFallback?: boolean;
   indicator?: boolean;
+  background?: boolean;
 }
 
 interface SessionMetadata {
@@ -80,6 +84,7 @@ export class ComputerUseSessionManager {
   private mode: ComputerUseMode = "host-fallback";
   private owner: ComputerUseControlOwner = "agent";
   private indicatorState: ComputerUseIndicatorState = "idle";
+  private viewerVisible = false;
   private sessionId: string | undefined;
   private sessionPid: number | undefined;
   private width: number | undefined;
@@ -165,6 +170,10 @@ export class ComputerUseSessionManager {
       this.state = "ready";
       this.sessionPid = this.sessionPid ?? metadata.hostPid;
       this.startedAt = metadata.startedAt || this.startedAt;
+      this.viewerVisible = this.mode === "isolated-window";
+      if (options.background === true && this.mode === "isolated-window") {
+        await this.setViewerVisible(false, metadata);
+      }
       this.writeIndicator("active");
       this.startTakeoverMonitor();
       this.touchInteraction();
@@ -202,6 +211,13 @@ export class ComputerUseSessionManager {
             : this.mode;
         this.sessionId = metadata.sessionId;
         this.startedAt = metadata.startedAt;
+        if (this.mode === "isolated-window" && metadata.kwinPid) {
+          const windows = await this.hostClient.windows().catch(() => []);
+          const viewer = windows.find((window) => window.pid === metadata.kwinPid);
+          if (viewer) this.viewerVisible = !viewer.minimized;
+        } else {
+          this.viewerVisible = false;
+        }
         this.startTakeoverMonitor();
         return this.snapshot(metadata);
       }
@@ -227,6 +243,7 @@ export class ComputerUseSessionManager {
     this.state = "stopped";
     this.mode = "host-fallback";
     this.owner = "agent";
+    this.viewerVisible = false;
     this.sessionId = undefined;
     this.sessionPid = undefined;
     this.startedAt = undefined;
@@ -254,6 +271,32 @@ export class ComputerUseSessionManager {
     this.writeIndicator(this.owner === "agent" ? "active" : "user");
     this.touchInteraction();
     return { pid, file };
+  }
+
+  async showViewer(): Promise<ComputerUseStatus> {
+    const status = await this.refresh();
+    if (!this.active || status.state !== "ready" || status.mode === "host-fallback") {
+      await this.start({ headless: false, background: false, allowHostFallback: false, indicator: true });
+    }
+    if (this.mode === "isolated-headless") {
+      throw new Error("This Computer Use session was explicitly started as true headless mode and cannot be attached without restarting it. Start without headless mode to use the detachable Agent Desktop viewer.");
+    }
+    const metadata = this.requireSessionMetadata();
+    await this.setViewerVisible(true, metadata);
+    this.viewerVisible = true;
+    this.touchInteraction();
+    return this.snapshot(metadata);
+  }
+
+  async hideViewer(): Promise<ComputerUseStatus> {
+    const status = await this.refresh();
+    if (!this.active || status.state !== "ready" || this.mode !== "isolated-window") return status;
+    const metadata = this.requireSessionMetadata();
+    await this.setViewerVisible(false, metadata);
+    this.viewerVisible = false;
+    if (this.owner === "user") this.returnAgentControl();
+    else this.touchInteraction();
+    return this.snapshot(metadata);
   }
 
   async agentInput(request: DesktopInputRequest): Promise<DesktopInputResult> {
@@ -299,7 +342,8 @@ export class ComputerUseSessionManager {
       return;
     }
     await this.start({
-      headless: true,
+      headless: false,
+      background: true,
       allowHostFallback: false,
       indicator: true,
     });
@@ -343,6 +387,7 @@ export class ComputerUseSessionManager {
       ...(this.height ? { height: this.height } : {}),
       ...(this.startedAt ? { startedAt: this.startedAt } : {}),
       indicatorState: this.indicatorState,
+      viewerVisible: this.viewerVisible,
       ...(this.fallbackReason ? { fallbackReason: this.fallbackReason } : {}),
     };
   }
@@ -394,6 +439,71 @@ export class ComputerUseSessionManager {
     };
   }
 
+  private async setViewerVisible(visible: boolean, metadata = this.requireSessionMetadata()): Promise<void> {
+    if (this.mode !== "isolated-window" || !metadata.kwinPid) {
+      if (visible) throw new Error("The current Computer Use session does not have an attachable Agent Desktop viewer.");
+      this.viewerVisible = false;
+      return;
+    }
+    const qdbus = "/usr/bin/qdbus6";
+    if (!existsSync(qdbus)) throw new Error("qdbus6 is required to show or hide the Agent Desktop viewer on KDE Wayland.");
+    const uid = process.getuid?.();
+    if (uid === undefined) throw new Error("Unable to resolve the current Linux user ID for Agent Desktop viewer control.");
+    const runtimeDir = process.env.XDG_RUNTIME_DIR || `/run/user/${uid}`;
+    const dbusEnv = {
+      ...process.env,
+      XDG_RUNTIME_DIR: runtimeDir,
+      DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS || `unix:path=${runtimeDir}/bus`,
+    };
+    const scriptPath = join(this.computerStateDir, `viewer-${randomUUID()}.js`);
+    const pluginName = `devspace-computer-use-viewer-${randomUUID()}`;
+    const script = [
+      `const targetPid = ${metadata.kwinPid};`,
+      `const makeVisible = ${visible ? "true" : "false"};`,
+      "for (const window of workspace.windowList()) {",
+      "    if (Number(window.pid) !== targetPid) continue;",
+      "    window.minimized = !makeVisible;",
+      "}",
+    ].join("\n") + "\n";
+    writeFileSync(scriptPath, script, { mode: 0o600 });
+    if (process.platform !== "win32") chmodSync(scriptPath, 0o600);
+    try {
+      await execFileAsync(qdbus, [
+        "org.kde.KWin",
+        "/Scripting",
+        "org.kde.kwin.Scripting.unloadScript",
+        pluginName,
+      ], { env: dbusEnv }).catch(() => undefined);
+      await execFileAsync(qdbus, [
+        "org.kde.KWin",
+        "/Scripting",
+        "org.kde.kwin.Scripting.loadScript",
+        scriptPath,
+        pluginName,
+      ], { env: dbusEnv });
+      await execFileAsync(qdbus, [
+        "org.kde.KWin",
+        "/Scripting",
+        "org.kde.kwin.Scripting.start",
+      ], { env: dbusEnv });
+      await delay(120);
+      const windows = await this.hostClient.windows().catch(() => []);
+      const viewer = windows.find((window) => window.pid === metadata.kwinPid);
+      if (!viewer || viewer.minimized === visible) {
+        throw new Error(`KWin did not ${visible ? "show" : "hide"} the Agent Desktop viewer.`);
+      }
+      this.viewerVisible = visible;
+    } finally {
+      await execFileAsync(qdbus, [
+        "org.kde.KWin",
+        "/Scripting",
+        "org.kde.kwin.Scripting.unloadScript",
+        pluginName,
+      ], { env: dbusEnv }).catch(() => undefined);
+      rmSync(scriptPath, { force: true });
+    }
+  }
+
   private async forceStopIsolated(): Promise<void> {
     this.stopIdleCleanup();
     this.stopTakeoverMonitor();
@@ -406,6 +516,7 @@ export class ComputerUseSessionManager {
       try { this.sessionProcess.kill("SIGTERM"); } catch { /* already gone */ }
     }
     this.sessionProcess = undefined;
+    this.viewerVisible = false;
     await this.isolatedClient.stop().catch(() => undefined);
     rmSync(join(this.computerStateDir, "control.sock"), { force: true });
     rmSync(this.sessionPath, { force: true });
@@ -436,6 +547,7 @@ export class ComputerUseSessionManager {
       controlOwner: this.owner,
       sessionState: this.state,
       mode: this.mode,
+      viewerVisible: this.viewerVisible,
       updatedAt: new Date().toISOString(),
     };
     writeFileSync(this.indicatorStatePath, JSON.stringify(payload) + "\n", { mode: 0o600 });
@@ -505,6 +617,7 @@ export class ComputerUseSessionManager {
     try {
       const parsed = JSON.parse(readFileSync(this.indicatorStatePath, "utf8")) as Record<string, unknown>;
       if (parsed.controlOwner === "agent" || parsed.controlOwner === "user") this.owner = parsed.controlOwner;
+      if (typeof parsed.viewerVisible === "boolean") this.viewerVisible = parsed.viewerVisible;
       if (
         parsed.state === "idle" || parsed.state === "active" || parsed.state === "controlling"
         || parsed.state === "waiting" || parsed.state === "user" || parsed.state === "error"

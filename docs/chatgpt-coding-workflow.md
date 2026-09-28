@@ -216,11 +216,14 @@ deleting its private temporary PNG afterward.
 For genuine GUI work on Linux/KDE Wayland, use `computer_use_launch`. DevSpace
 runs a nested KWin compositor with its own desktop agent, screen capture,
 clipboard, accessibility tree, and EIS mouse/keyboard devices. If no session is
-running, app launch and direct input automatically start a headless isolated
-session and fail closed rather than falling back to the physical desktop.
-Windowed mode is still available through `computer_use_start` when a visible
-Agent Desktop viewer is useful. Normal shell/build/file work stays headless and
-does not need this session.
+running, app launch and direct input automatically start an isolated windowed
+session minimized in the background and fail closed rather than falling back to
+the physical desktop. `computer_use_show` reveals that same running Agent
+Desktop without restarting its apps, while `computer_use_hide` minimizes it
+again and lets agent work continue. Watching the viewer does not transfer input
+ownership. Explicit `headless: true` remains available for a truly non-attachable
+virtual compositor. Normal shell/build/file work stays headless and does not
+need this session.
 
 The physical desktop and Agent Desktop have separate input ownership. DevSpace
 keeps agent input routed to the nested compositor while the agent owns control.

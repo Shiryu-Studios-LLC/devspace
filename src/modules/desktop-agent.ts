@@ -80,6 +80,7 @@ const computerUseOutputSchema = {
     height: z.number().int().positive().optional(),
     startedAt: z.string().optional(),
     indicatorState: z.enum(["idle", "active", "controlling", "waiting", "user", "error"]),
+    viewerVisible: z.boolean(),
     fallbackReason: z.string().optional(),
   }).optional(),
 };
@@ -123,13 +124,14 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
     {
       title: "Start Isolated Computer Use",
       description:
-        "Start a nested KDE/Wayland desktop dedicated to DevSpace Computer Use. Apps, screenshots, accessibility, clipboard, mouse, and keyboard operations then target that isolated desktop so the user can keep using their normal desktop. The default windowed viewer lets the user watch or take control; headless mode keeps the agent desktop off-screen. If isolation cannot start, host fallback is allowed only when requested.",
+        "Start a nested KDE/Wayland desktop dedicated to DevSpace Computer Use. Apps, screenshots, accessibility, clipboard, mouse, and keyboard operations then target that isolated desktop so the user can keep using their normal desktop. Windowed sessions can start visible or minimized in the background and can be shown/hidden later without stopping the work. True headless mode has no attachable viewer. If isolation cannot start, host fallback is allowed only when requested.",
       inputSchema: {
         width: z.number().int().min(640).max(3840).optional(),
         height: z.number().int().min(480).max(2160).optional(),
         headless: z.boolean().optional(),
         allowHostFallback: z.boolean().optional().describe("Allow the legacy live-desktop path if the isolated compositor cannot start. Defaults to false for safe concurrent use."),
         indicator: z.boolean().optional().describe("Show the capture-excluded edge glow on the user's physical desktop. Defaults to true."),
+        background: z.boolean().optional().describe("Start the windowed Agent Desktop minimized in the background so it can be shown later. Ignored for true headless mode."),
       },
       outputSchema: computerUseOutputSchema,
       _meta: {},
@@ -143,6 +145,7 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
           headless: input.headless,
           allowHostFallback: input.allowHostFallback ?? false,
           indicator: input.indicator,
+          background: input.background,
         });
         return computerUseResponse(computer, formatComputerUseStatus(computer));
       } catch (error) {
@@ -180,6 +183,50 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
           content: [{ type: "text" as const, text: result }],
           structuredContent: { status: "ready" as const, result, ...launched },
         };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "computer_use_show",
+    {
+      title: "Show Agent Desktop",
+      description:
+        "Show the existing isolated Agent Desktop viewer without stopping or restarting the work. Watching does not transfer input ownership; the user can grab the viewer when they want to take control.",
+      inputSchema: {},
+      outputSchema: computerUseOutputSchema,
+      _meta: {},
+      annotations: inputAnnotations,
+    },
+    async () => {
+      try {
+        const computer = await computerUse.showViewer();
+        return computerUseResponse(computer, "Agent Desktop is visible. GPT continues working until the user explicitly takes control.");
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "computer_use_hide",
+    {
+      title: "Hide Agent Desktop",
+      description:
+        "Minimize the Agent Desktop viewer while keeping the isolated session and its applications running in the background. If the user owned control, hiding the viewer returns control to the agent so work can continue.",
+      inputSchema: {},
+      outputSchema: computerUseOutputSchema,
+      _meta: {},
+      annotations: inputAnnotations,
+    },
+    async () => {
+      try {
+        const computer = await computerUse.hideViewer();
+        return computerUseResponse(computer, "Agent Desktop is hidden; the isolated session is still running in the background.");
       } catch (error) {
         return clientErrorResponse(error);
       }
@@ -1918,6 +1965,7 @@ function formatComputerUseStatus(computer: ComputerUseStatus): string {
     `Computer Use ${computer.state}`,
     `mode ${computer.mode}`,
     `control ${computer.controlOwner}`,
+    `viewer ${computer.viewerVisible ? "visible" : "hidden"}`,
     `indicator ${computer.indicatorState}`,
   ];
   if (computer.width && computer.height) parts.push(`${computer.width}×${computer.height}`);

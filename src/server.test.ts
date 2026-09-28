@@ -206,6 +206,8 @@ test("module status keeps core health separate from secondary modules", async (t
     "computer_use_status",
     "computer_use_start",
     "computer_use_launch",
+    "computer_use_show",
+    "computer_use_hide",
     "computer_use_take_control",
     "computer_use_return_control",
     "computer_use_stop",
