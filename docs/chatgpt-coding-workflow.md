@@ -208,16 +208,19 @@ redirection, heredocs, `tee`, `sed -i`, or generated scripts.
 
 Keep routine work headless. Do not launch a terminal emulator, image viewer,
 editor, or browser just to run a command or inspect a generated file. Shell and
-process tools already run without opening a desktop window, and
-`desktop_capture_screen` returns screenshots directly while deleting its private
-temporary PNG afterward.
+process tools remove the host `DISPLAY`/`WAYLAND_DISPLAY` from their execution
+environment so routine commands cannot accidentally open windows on the user's
+physical desktop. `desktop_capture_screen` returns screenshots directly while
+deleting its private temporary PNG afterward.
 
-For genuine GUI work on Linux/KDE Wayland, start the isolated computer-use
-session before using desktop input. DevSpace runs a nested KWin compositor with
-its own desktop agent, screen capture, clipboard, accessibility tree, and EIS
-mouse/keyboard devices. Windowed mode gives the user an Agent Desktop viewer;
-headless mode keeps the entire graphical session in the background. Normal
-shell/build/file work still stays headless and does not need this session.
+For genuine GUI work on Linux/KDE Wayland, use `computer_use_launch`. DevSpace
+runs a nested KWin compositor with its own desktop agent, screen capture,
+clipboard, accessibility tree, and EIS mouse/keyboard devices. If no session is
+running, app launch and direct input automatically start a headless isolated
+session and fail closed rather than falling back to the physical desktop.
+Windowed mode is still available through `computer_use_start` when a visible
+Agent Desktop viewer is useful. Normal shell/build/file work stays headless and
+does not need this session.
 
 The physical desktop and Agent Desktop have separate input ownership. DevSpace
 keeps agent input routed to the nested compositor while the agent owns control.
@@ -225,6 +228,15 @@ When the user grabs the Agent Desktop viewer (KWin's Right Ctrl grab), DevSpace
 automatically marks control as user-owned and refuses further agent mouse or
 keyboard actions until control is returned. Moving and typing elsewhere on the
 physical desktop does not interrupt the background agent session.
+
+When the GUI task is complete, call `computer_use_stop`. The session host tracks
+every process group launched through Computer Use and terminates the complete
+process tree during cleanup, so terminal windows, viewers, and helper processes
+do not remain behind. As a fallback for missed explicit cleanup, an agent-owned
+Computer Use session automatically stops after five minutes without interaction
+(`DEVSPACE_COMPUTER_USE_IDLE_TIMEOUT_MS` can override this; `0` disables the
+idle timeout). User-owned/takeover sessions are never auto-closed while the user
+has control.
 
 While computer use is active, a compositor-level edge indicator shows its state:
 purple for active, blue while agent input is being sent, amber while waiting,

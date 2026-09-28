@@ -91,10 +91,15 @@ function processEnvironment(input?: {
   workspaceId?: string;
   workspaceRoot?: string;
 }): Record<string, string> {
+  const inherited = Object.fromEntries(
+    Object.entries(process.env).filter((entry): entry is [string, string] => {
+      if (entry[1] === undefined) return false;
+      return entry[0] !== "DISPLAY" && entry[0] !== "WAYLAND_DISPLAY";
+    }),
+  );
   return {
-    ...Object.fromEntries(
-      Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
-    ),
+    ...inherited,
+    DEVSPACE_HEADLESS: "1",
     NO_COLOR: "1",
     TERM: "dumb",
     PAGER: "cat",

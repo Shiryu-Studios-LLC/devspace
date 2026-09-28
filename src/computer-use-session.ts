@@ -11,6 +11,7 @@ const STARTUP_TIMEOUT_MS = 18_000;
 const CONTROL_TIMEOUT_MS = 5_000;
 const TAKEOVER_POLL_MS = 350;
 const MAX_CONTROL_BYTES = 128 * 1024;
+const DEFAULT_IDLE_CLEANUP_MS = 5 * 60 * 1000;
 
 export type ComputerUseControlOwner = "agent" | "user";
 export type ComputerUseMode = "isolated-window" | "isolated-headless" | "host-fallback";
@@ -88,6 +89,7 @@ export class ComputerUseSessionManager {
   private sessionProcess: ChildProcess | undefined;
   private indicatorProcess: ChildProcess | undefined;
   private takeoverTimer: NodeJS.Timeout | undefined;
+  private idleCleanupTimer: NodeJS.Timeout | undefined;
   private activityCursor = 0;
 
   constructor(readonly stateDir: string, hostClient?: DesktopAgentClient) {
@@ -119,10 +121,18 @@ export class ComputerUseSessionManager {
     return this.isolatedClient;
   }
 
+  async interactionClient(): Promise<DesktopAgentClient> {
+    await this.ensureIsolatedForInteraction();
+    if (this.owner !== "agent") throw new ComputerUseUserControlError();
+    this.touchInteraction();
+    return this.isolatedClient;
+  }
+
   async start(options: ComputerUseStartOptions = {}): Promise<ComputerUseStatus> {
     const existing = await this.refresh();
     if (existing.state === "ready" && existing.mode !== "host-fallback") {
       if (options.indicator !== false) this.ensureIndicator();
+      this.touchInteraction();
       return existing;
     }
 
@@ -157,6 +167,7 @@ export class ComputerUseSessionManager {
       this.startedAt = metadata.startedAt || this.startedAt;
       this.writeIndicator("active");
       this.startTakeoverMonitor();
+      this.touchInteraction();
       return this.snapshot(metadata);
     } catch (error) {
       await this.forceStopIsolated().catch(() => undefined);
@@ -204,10 +215,12 @@ export class ComputerUseSessionManager {
 
   async stop(): Promise<ComputerUseStatus> {
     this.state = "stopping";
+    this.stopIdleCleanup();
     this.stopTakeoverMonitor();
     const metadata = this.readSessionMetadata();
     if (metadata) {
       await requestControl(metadata.controlSocket, { type: "stop" }).catch(() => undefined);
+      await waitForSessionTeardown(this.sessionPath, 1_500);
     }
     await this.forceStopIsolated().catch(() => undefined);
     this.active = false;
@@ -224,7 +237,7 @@ export class ComputerUseSessionManager {
   }
 
   async launch(file: string, args: string[] = [], cwd?: string): Promise<{ pid: number; file: string }> {
-    if (!this.active) throw new Error("The isolated DevSpace computer-use desktop is not running.");
+    await this.ensureIsolatedForInteraction();
     if (!resolve(file).startsWith("/") || !existsSync(file)) throw new Error("Application path must be an existing absolute path.");
     if (args.length > 256 || args.some((arg) => typeof arg !== "string" || arg.length > 16_384)) {
       throw new Error("Application arguments are invalid or too large.");
@@ -239,20 +252,26 @@ export class ComputerUseSessionManager {
     const pid = typeof response.pid === "number" ? response.pid : undefined;
     if (!pid) throw new Error("Computer-use session did not return an application PID.");
     this.writeIndicator(this.owner === "agent" ? "active" : "user");
+    this.touchInteraction();
     return { pid, file };
   }
 
   async agentInput(request: DesktopInputRequest): Promise<DesktopInputResult> {
-    if (this.active && this.owner !== "agent") throw new ComputerUseUserControlError();
-    if (this.active) this.writeIndicator("controlling");
+    await this.ensureIsolatedForInteraction();
+    if (this.owner !== "agent") throw new ComputerUseUserControlError();
+    this.writeIndicator("controlling");
     try {
-      return await this.routedClient().input(request);
+      return await this.isolatedClient.input(request);
     } finally {
-      if (this.active && this.owner === "agent") this.writeIndicator("active");
+      if (this.active && this.owner === "agent") {
+        this.writeIndicator("active");
+        this.touchInteraction();
+      }
     }
   }
 
   takeUserControl(): ComputerUseStatus {
+    this.stopIdleCleanup();
     this.owner = "user";
     this.writeIndicator("user");
     return this.snapshot(this.readSessionMetadata());
@@ -261,6 +280,7 @@ export class ComputerUseSessionManager {
   returnAgentControl(): ComputerUseStatus {
     this.owner = "agent";
     this.writeIndicator(this.active ? "active" : "idle");
+    this.touchInteraction();
     return this.snapshot(this.readSessionMetadata());
   }
 
@@ -270,6 +290,44 @@ export class ComputerUseSessionManager {
 
   markError(): void {
     this.writeIndicator("error");
+  }
+
+  private async ensureIsolatedForInteraction(): Promise<void> {
+    const status = await this.refresh();
+    if (this.active && status.state === "ready" && status.mode !== "host-fallback") {
+      this.touchInteraction();
+      return;
+    }
+    await this.start({
+      headless: true,
+      allowHostFallback: false,
+      indicator: true,
+    });
+    if (!this.active) {
+      throw new Error("DevSpace refused to use the physical desktop because an isolated computer-use session could not be started.");
+    }
+    this.touchInteraction();
+  }
+
+  private touchInteraction(): void {
+    if (!this.active || this.owner !== "agent") return;
+    this.stopIdleCleanup();
+    const timeoutMs = computerUseIdleCleanupMs();
+    if (timeoutMs <= 0) return;
+    this.idleCleanupTimer = setTimeout(() => {
+      this.idleCleanupTimer = undefined;
+      if (!this.active || this.owner !== "agent") return;
+      void this.stop().catch(() => {
+        this.state = "error";
+        this.writeIndicator("error");
+      });
+    }, timeoutMs);
+    this.idleCleanupTimer.unref();
+  }
+
+  private stopIdleCleanup(): void {
+    if (this.idleCleanupTimer) clearTimeout(this.idleCleanupTimer);
+    this.idleCleanupTimer = undefined;
   }
 
   private snapshot(metadata = this.readSessionMetadata()): ComputerUseStatus {
@@ -337,6 +395,7 @@ export class ComputerUseSessionManager {
   }
 
   private async forceStopIsolated(): Promise<void> {
+    this.stopIdleCleanup();
     this.stopTakeoverMonitor();
     const metadata = this.readSessionMetadata();
     for (const pid of [metadata?.hostPid, metadata?.kwinPid, this.sessionPid]) {
@@ -478,6 +537,15 @@ function ensurePrivateDirectory(path: string): void {
   if (process.platform !== "win32") chmodSync(path, 0o700);
 }
 
+function computerUseIdleCleanupMs(): number {
+  const raw = process.env.DEVSPACE_COMPUTER_USE_IDLE_TIMEOUT_MS;
+  if (!raw) return DEFAULT_IDLE_CLEANUP_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return DEFAULT_IDLE_CLEANUP_MS;
+  if (parsed <= 0) return 0;
+  return Math.max(30_000, Math.min(60 * 60 * 1000, Math.round(parsed)));
+}
+
 function clampDimension(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.max(min, Math.min(max, Math.round(value)));
@@ -517,6 +585,14 @@ async function waitForSessionMetadata(path: string, sessionId: string, timeoutMs
     await delay(80);
   }
   throw new Error("The isolated computer-use session did not publish its runtime metadata before the startup timeout.");
+}
+
+async function waitForSessionTeardown(path: string, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!existsSync(path)) return;
+    await delay(50);
+  }
 }
 
 async function requestControl(socketPath: string, payload: Record<string, unknown>): Promise<ControlResponse> {

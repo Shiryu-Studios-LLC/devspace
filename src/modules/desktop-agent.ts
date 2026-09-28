@@ -157,7 +157,7 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
     {
       title: "Launch App In Computer Use",
       description:
-        "Launch one local application inside the isolated DevSpace computer-use desktop. Use an absolute executable path. The app inherits the isolated Wayland/XWayland session and does not steal focus from the user's normal desktop.",
+        "Launch one local application inside the isolated DevSpace computer-use desktop. Use an absolute executable path. If no Computer Use session is running, DevSpace automatically starts a headless isolated desktop first. The app never inherits the user's physical desktop display.",
       inputSchema: {
         file: z.string().min(1),
         args: z.array(z.string().max(16_384)).max(256).optional(),
@@ -228,7 +228,7 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
     {
       title: "Stop Isolated Computer Use",
       description:
-        "Stop the dedicated nested KDE/Wayland computer-use desktop, close applications launched through that session, and turn off the edge indicator. DevSpace core remains running.",
+        "Stop the dedicated nested KDE/Wayland computer-use desktop, close every application/process group launched through that session, and turn off the edge indicator. DevSpace also performs this cleanup automatically after an agent-owned session has been idle for five minutes. DevSpace core remains running.",
       inputSchema: {},
       outputSchema: computerUseOutputSchema,
       _meta: {},
@@ -625,7 +625,8 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
     },
     async () => {
       try {
-        const clipboard = await client.readClipboard();
+        const interactionClient = await computerUse.interactionClient();
+        const clipboard = await interactionClient.readClipboard();
         const result = formatClipboardReadSummary(clipboard);
         return {
           content: [{ type: "text" as const, text: clipboard.available ? `${result}\n\n${clipboard.text ?? ""}` : result }],
@@ -666,7 +667,8 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
     },
     async ({ text }) => {
       try {
-        const clipboard = await client.writeClipboard(text);
+        const interactionClient = await computerUse.interactionClient();
+        const clipboard = await interactionClient.writeClipboard(text);
         const result = formatClipboardWriteSummary(clipboard);
         return {
           content: [{ type: "text" as const, text: result }],
@@ -735,7 +737,8 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
     },
     async ({ application, maxDepth, maxNodes }) => {
       try {
-        const snapshot = await client.accessibilitySnapshot({ application, maxDepth, maxNodes });
+        const interactionClient = await computerUse.interactionClient();
+        const snapshot = await interactionClient.accessibilitySnapshot({ application, maxDepth, maxNodes });
         const result = formatAccessibilitySummary(snapshot);
         return {
           content: [{ type: "text" as const, text: result }],
@@ -782,7 +785,8 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
     },
     async (input) => {
       try {
-        const action = await client.accessibilityAction(input);
+        const interactionClient = await computerUse.interactionClient();
+        const action = await interactionClient.accessibilityAction(input);
         const result = formatAccessibilityActionSummary(action);
         return {
           content: [{ type: "text" as const, text: result }],
@@ -799,7 +803,7 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
     "desktop_mouse_move",
     {
       title: "Move Desktop Mouse",
-      description: "Move the Wayland pointer through DevSpace's validated user-scoped input provider. Relative coordinates are limited to ±32768; absolute coordinates are limited to 0..100000.",
+      description: "Move the pointer inside DevSpace's isolated Computer Use desktop. If needed, a headless isolated desktop is started automatically; this action never injects pointer input into the user's physical KDE desktop. Relative coordinates are limited to ±32768; absolute coordinates are limited to 0..100000.",
       inputSchema: {
         mode: z.enum(["relative", "absolute"]),
         x: z.number().int(),
@@ -825,7 +829,7 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
     "desktop_mouse_click",
     {
       title: "Click Desktop Mouse",
-      description: "Click the left, right, or middle mouse button through DevSpace's validated user-scoped Wayland input provider.",
+      description: "Click inside DevSpace's isolated Computer Use desktop. If needed, a headless isolated desktop is started automatically; this action never clicks the user's physical KDE desktop.",
       inputSchema: {
         button: z.enum(["left", "right", "middle"]),
         count: z.number().int().min(1).max(10).optional(),
@@ -851,7 +855,7 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
     "desktop_mouse_scroll",
     {
       title: "Scroll Desktop Mouse",
-      description: "Scroll the Wayland pointer wheel through DevSpace's validated input provider. Values are bounded to -120..120 per axis.",
+      description: "Scroll inside DevSpace's isolated Computer Use desktop. If needed, a headless isolated desktop is started automatically. Values are bounded to -120..120 per axis.",
       inputSchema: {
         x: z.number().int().min(-120).max(120).optional(),
         y: z.number().int().min(-120).max(120),
@@ -876,7 +880,7 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
     "desktop_type_text",
     {
       title: "Type Desktop Text",
-      description: "Type literal text into the currently focused desktop control through DevSpace's validated input provider. Text is limited to 16384 characters and is passed directly to ydotool without shell interpretation.",
+      description: "Type literal text into the focused control inside DevSpace's isolated Computer Use desktop. If needed, a headless isolated desktop is started automatically; host-desktop text injection is not used. Text is limited to 16384 characters.",
       inputSchema: {
         text: z.string().max(16_384),
         keyDelayMs: z.number().int().min(0).max(1000).optional(),
@@ -902,7 +906,7 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
     "desktop_key_chord",
     {
       title: "Press Desktop Key Chord",
-      description: "Press and release one named keyboard key with optional Ctrl/Shift/Alt/Meta modifiers through the validated Wayland input provider.",
+      description: "Press and release one named keyboard key with optional Ctrl/Shift/Alt/Meta modifiers inside DevSpace's isolated Computer Use desktop. If needed, a headless isolated desktop is started automatically.",
       inputSchema: {
         key: z.enum(["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z","0","1","2","3","4","5","6","7","8","9","enter","escape","tab","backspace","space","delete","insert","left","right","up","down","home","end","pageup","pagedown","f1","f2","f3","f4","f5","f6","f7","f8","f9","f10","f11","f12"]),
         modifiers: z.array(z.enum(["ctrl", "shift", "alt", "meta"])).max(4).optional(),

@@ -222,8 +222,11 @@ export async function runShellTool(input: BashToolInput, context: ToolContext): 
   }
 
   const tool = createBashTool(context.cwd);
+  const command = process.platform === "linux"
+    ? `unset DISPLAY WAYLAND_DISPLAY; export DEVSPACE_HEADLESS=1; ${input.command}`
+    : input.command;
   return runTool((params) => tool.execute("run_shell", params), {
-    command: input.command,
+    command,
     timeout,
   }, context);
 }

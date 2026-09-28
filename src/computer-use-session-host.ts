@@ -14,6 +14,7 @@ const controlSocket = join(stateDir, "control.sock");
 const sessionPath = join(stateDir, "session.json");
 const agentEntrypoint = fileURLToPath(new URL("./desktop-agent-main.js", import.meta.url));
 const launched = new Map<number, ChildProcess>();
+const launchedProcessGroups = new Set<number>();
 let agent: ChildProcess | undefined;
 let shuttingDown = false;
 
@@ -87,14 +88,16 @@ async function dispatch(line: string): Promise<Record<string, unknown>> {
       ? resolve(request.cwd)
       : undefined;
     if (cwd && !isAbsolute(cwd)) throw new Error("launch cwd must be absolute");
+    const detached = process.platform !== "win32";
     const child = spawn(request.file, args as string[], {
       cwd,
       env: process.env,
-      detached: false,
+      detached,
       stdio: "ignore",
     });
     child.unref();
     launched.set(child.pid!, child);
+    if (detached && child.pid) launchedProcessGroups.add(child.pid);
     child.once("exit", () => launched.delete(child.pid!));
     return { pid: child.pid, file: request.file };
   }
@@ -130,16 +133,32 @@ async function shutdown(exitCode: number): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   await new Promise<void>((resolveClose) => server.close(() => resolveClose())).catch(() => undefined);
-  for (const child of launched.values()) {
-    try { child.kill("SIGTERM"); } catch { /* already gone */ }
+  if (process.platform !== "win32") {
+    const processGroups = [...launchedProcessGroups];
+    for (const processGroup of processGroups) terminateProcessGroup(processGroup, "SIGTERM");
+    if (processGroups.length > 0) await delay(750);
+    for (const processGroup of processGroups) terminateProcessGroup(processGroup, "SIGKILL");
+  } else {
+    for (const child of launched.values()) {
+      try { child.kill("SIGTERM"); } catch { /* already gone */ }
+    }
   }
   launched.clear();
+  launchedProcessGroups.clear();
   if (agent && agent.exitCode === null) {
     try { agent.kill("SIGTERM"); } catch { /* already gone */ }
   }
   rmSync(controlSocket, { force: true });
   rmSync(sessionPath, { force: true });
   process.exit(exitCode);
+}
+
+function terminateProcessGroup(processGroup: number, signal: NodeJS.Signals): void {
+  try { process.kill(-processGroup, signal); } catch { /* process group already exited */ }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 }
 
 function requiredEnv(name: string): string {
