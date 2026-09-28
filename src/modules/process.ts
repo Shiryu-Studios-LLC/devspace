@@ -80,7 +80,7 @@ export function registerCodexProcessTools(
     {
       title: "Execute command",
       description:
-        "Run a command in a workspace. Returns its result when it exits during the yield window, otherwise returns a sessionId for write_stdin. Use this for file inspection, tests, builds, package scripts, and long-running processes.",
+        "Run a command headlessly in a workspace. Returns its result when it exits during the yield window, otherwise returns a sessionId for write_stdin. Use this for file inspection, tests, builds, package scripts, and long-running processes. Do not launch GUI terminals, image viewers, editors, browsers, or desktop apps merely to execute commands or inspect outputs.",
       inputSchema: {
         workspaceId: z.string().describe(workspaceIdDescription),
         cmd: z.string().min(1).describe("Shell command to execute."),

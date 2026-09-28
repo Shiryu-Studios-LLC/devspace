@@ -205,3 +205,17 @@ The shell tool is for commands that belong in a terminal:
 
 File writes should go through the edit/write tools rather than shell
 redirection, heredocs, `tee`, `sed -i`, or generated scripts.
+
+Keep routine work headless. Do not launch a terminal emulator, image viewer,
+editor, or browser just to run a command or inspect a generated file. Shell and
+process tools already run without opening a desktop window, and
+`desktop_capture_screen` returns screenshots directly while deleting its private
+temporary PNG afterward.
+
+Desktop mouse and keyboard tools currently target the user's live KDE/Wayland
+session. They are therefore foreground operations and can race with the user's
+own mouse or keyboard input. Truly simultaneous GUI computer use requires a
+separate graphical session (for example a dedicated nested/headless Wayland
+session or VM) with capture and input routed to that session; DevSpace does not
+currently provide that isolated GUI-session backend. Prefer headless tools while
+the user is actively using the desktop.
