@@ -11,13 +11,16 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLinearGradient>
+#include <QLockFile>
 #include <QPainter>
 #include <QScreen>
 #include <QTimer>
 #include <QWidget>
 #include <LayerShellQt/Window>
 
+#include <cerrno>
 #include <cmath>
+#include <csignal>
 #include <memory>
 #include <vector>
 
@@ -34,6 +37,12 @@ QColor stateColor(const QString &state) {
     if (state == QStringLiteral("user")) return QColor(QStringLiteral("#55D69B"));
     if (state == QStringLiteral("error")) return QColor(QStringLiteral("#FF657C"));
     return QColor(QStringLiteral("#9A7BFF"));
+}
+
+bool processExists(qint64 pid) {
+    if (pid <= 0) return false;
+    if (::kill(static_cast<pid_t>(pid), 0) == 0) return true;
+    return errno == EPERM;
 }
 
 class GlowEdge final : public QWidget {
@@ -197,9 +206,22 @@ private:
         const auto document = QJsonDocument::fromJson(file.readAll());
         if (!document.isObject()) {
             applyState(QStringLiteral("idle"));
+            QTimer::singleShot(0, qApp, &QCoreApplication::quit);
             return;
         }
-        applyState(document.object().value(QStringLiteral("state")).toString(QStringLiteral("idle")));
+        const auto object = document.object();
+        const auto state = object.value(QStringLiteral("state")).toString(QStringLiteral("idle"));
+        const auto sessionState = object.value(QStringLiteral("sessionState")).toString(QStringLiteral("stopped"));
+        const auto controllerPid = object.value(QStringLiteral("controllerPid")).toInteger(-1);
+        if (state == QStringLiteral("idle")
+            || sessionState == QStringLiteral("stopped")
+            || sessionState == QStringLiteral("stopping")
+            || !processExists(controllerPid)) {
+            applyState(QStringLiteral("idle"));
+            QTimer::singleShot(0, qApp, &QCoreApplication::quit);
+            return;
+        }
+        applyState(state);
     }
 
     void applyState(const QString &state) {
@@ -247,6 +269,12 @@ int main(int argc, char **argv) {
     if (argc != 2) return 2;
 
     const QString statePath = QString::fromLocal8Bit(argv[1]);
+    QLockFile instanceLock(statePath + QStringLiteral(".lock"));
+    instanceLock.setStaleLockTime(0);
+    if (!instanceLock.tryLock(0)) {
+        if (!instanceLock.removeStaleLockFile() || !instanceLock.tryLock(0)) return 0;
+    }
+
     const QString scriptPath = QCoreApplication::applicationDirPath()
         + QStringLiteral("/../share/devspace-computer-use-indicator-kwin.js");
     if (!installCaptureExclusion(QFileInfo(scriptPath).canonicalFilePath().isEmpty()

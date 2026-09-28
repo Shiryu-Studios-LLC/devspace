@@ -548,6 +548,7 @@ export class ComputerUseSessionManager {
       sessionState: this.state,
       mode: this.mode,
       viewerVisible: this.viewerVisible,
+      controllerPid: process.pid,
       updatedAt: new Date().toISOString(),
     };
     writeFileSync(this.indicatorStatePath, JSON.stringify(payload) + "\n", { mode: 0o600 });
@@ -595,9 +596,19 @@ export class ComputerUseSessionManager {
           this.hostClient.windows(),
         ]);
         this.consumeTakeoverEvents(timeline, metadata.kwinPid);
-        if (this.owner === "agent") {
-          const viewer = windows.find((window) => window.pid === metadata.kwinPid);
-          if (viewer && /\bungrab pointer\b/i.test(viewer.title)) this.takeUserControl();
+        const viewer = windows.find((window) => window.pid === metadata.kwinPid);
+        if (this.mode === "isolated-window" && this.owner === "user" && (!viewer || viewer.minimized)) {
+          // A user-owned viewer being closed/minimized is an explicit end-of-use signal.
+          // User-owned sessions do not use idle cleanup, so leaving them alive here would
+          // strand the physical-desktop edge indicator indefinitely.
+          void this.stop().catch(() => {
+            this.state = "error";
+            this.writeIndicator("error");
+          });
+          return;
+        }
+        if (this.owner === "agent" && viewer && /\bungrab pointer\b/i.test(viewer.title)) {
+          this.takeUserControl();
         }
       } catch {
         // Host focus/window telemetry is best effort; isolated input remains safe even without it.
