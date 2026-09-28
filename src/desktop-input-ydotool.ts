@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { KWinEisInputClient, kwinEisInputAvailable, type EisInputRequest } from "./desktop-input-eis.js";
 import type {
   DesktopInputKey,
   DesktopInputModifier,
@@ -19,6 +20,7 @@ export interface YdotoolInputOptions {
   timeoutMs?: number;
   now?: () => number;
   runYdotool?: (args: string[], options: { timeout: number; env: NodeJS.ProcessEnv }) => Promise<void>;
+  runEisInput?: (request: EisInputRequest) => Promise<void>;
 }
 
 export function ydotoolInputAvailable(
@@ -28,7 +30,26 @@ export function ydotoolInputAvailable(
   if (process.platform !== "linux" || !existsSync(ydotoolPath) || !socketPath) return false;
   try {
     const socket = statSync(socketPath);
-    return socket.isSocket();
+    return socket.isSocket() && unixSocketRegistered(socketPath);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A filesystem socket can survive after ydotoold dies. `/proc/net/unix` is
+ * kernel-owned state, so requiring the path there prevents a stale socket file
+ * from making the desktop agent advertise input as ready when no daemon is
+ * actually bound to it.
+ */
+export function unixSocketRegistered(
+  socketPath: string,
+  procNetUnixPath = "/proc/net/unix",
+): boolean {
+  try {
+    return readFileSync(procNetUnixPath, "utf8")
+      .split("\n")
+      .some((line) => line.trimEnd().endsWith(` ${socketPath}`));
   } catch {
     return false;
   }
@@ -49,19 +70,31 @@ export function createYdotoolInputProvider(
       env: runOptions.env,
     });
   });
+  const eisClient = options.runEisInput ? undefined : new KWinEisInputClient({ timeoutMs });
+  const runEisInput = options.runEisInput ?? ((request: EisInputRequest) => eisClient!.perform(request));
 
   return async (request) => {
-    if (!options.runYdotool && !ydotoolInputAvailable(ydotoolPath, socketPath)) {
-      throw new Error("ydotool input control is unavailable in this desktop session.");
-    }
+    const env = {
+      ...process.env,
+      YDOTOOL_SOCKET: socketPath,
+    };
+    // Build first so validation runs before either input backend executes.
     const args = buildYdotoolArgs(request);
-    await runYdotool(args, {
-      timeout: timeoutMs,
-      env: {
-        ...process.env,
-        YDOTOOL_SOCKET: socketPath,
-      },
-    });
+    const eisAvailable = Boolean(options.runEisInput) || kwinEisInputAvailable();
+    if (eisAvailable) {
+      // Keep pointer, wheel, keyboard, and text on KWin's compositor-scoped EIS
+      // seat. This is what allows an isolated nested KWin session to receive
+      // agent input without injecting events into the user's physical desktop.
+      await runEisInput(request);
+    } else {
+      if (!options.runYdotool && !ydotoolInputAvailable(ydotoolPath, socketPath)) {
+        throw new Error("Desktop input control is unavailable: KWin EIS and ydotool are both unavailable.");
+      }
+      await runYdotool(args, {
+        timeout: timeoutMs,
+        env,
+      });
+    }
     return {
       type: request.type,
       completed: true,

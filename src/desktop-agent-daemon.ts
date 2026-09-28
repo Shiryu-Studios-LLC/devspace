@@ -130,6 +130,7 @@ import {
   createYdotoolInputProvider,
   ydotoolInputAvailable,
 } from "./desktop-input-ydotool.js";
+import { kwinEisInputAvailable } from "./desktop-input-eis.js";
 import {
   LinuxFilesystemWatchManager,
   linuxFilesystemWatchAvailable,
@@ -857,7 +858,7 @@ export function defaultDesktopCapabilities(
   const clipboardReadReady = waylandClipboardReadAvailable();
   const clipboardWriteReady = waylandClipboardWriteAvailable();
   const accessibilityReady = atspiAccessibilityAvailable();
-  const inputReady = ydotoolInputAvailable();
+  const inputReady = kwinEisInputAvailable() || ydotoolInputAvailable();
   const audioReady = pipeWireAudioAwarenessAvailable();
   const audioRuntimeReady = pipeWireAudioRuntimeAvailable();
   const audioMeterReady = pipeWireAudioMeterAvailable();
@@ -897,8 +898,8 @@ export function defaultDesktopCapabilities(
       "KDE/KWin native workspace, screen, window, active-window, and rectangular PNG capture",
       "KDE/KWin ScreenShot2 capture helper is unavailable"),
     permissionAwareCapability(permissions, "input", inputReady,
-      "Validated Wayland keyboard/mouse control through the existing user-scoped ydotool daemon",
-      "ydotool or the user-scoped ydotool daemon socket is unavailable"),
+      "Compositor-scoped KWin EIS pointer, wheel, keyboard, and text input with ydotool fallback when EIS is unavailable",
+      "KWin EIS and the ydotool fallback are both unavailable"),
     permissionAwareCapability(permissions, "accessibility", accessibilityReady,
       "Bounded read-only AT-SPI semantic tree with roles, states, bounds, interfaces, and action metadata",
       "AT-SPI accessibility helper or desktop accessibility bus is unavailable"),

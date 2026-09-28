@@ -4,6 +4,11 @@ import { readFile, rm, stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import * as z from "zod/v4";
 import type { ServerConfig } from "../config.js";
+import {
+  ComputerUseSessionManager,
+  ComputerUseUserControlError,
+  type ComputerUseStatus,
+} from "../computer-use-session.js";
 import { assertAllowedPath } from "../roots.js";
 import {
   DesktopAgentClient,
@@ -60,8 +65,189 @@ const desktopInputOutputSchema = {
   }).optional(),
 };
 
+const computerUseOutputSchema = {
+  status: z.enum(["ready", "error"]),
+  result: z.string(),
+  computer: z.object({
+    state: z.enum(["stopped", "starting", "ready", "stopping", "error"]),
+    mode: z.enum(["isolated-window", "isolated-headless", "host-fallback"]),
+    controlOwner: z.enum(["agent", "user"]),
+    sessionId: z.string().optional(),
+    sessionPid: z.number().int().positive().optional(),
+    compositorPid: z.number().int().positive().optional(),
+    agentPid: z.number().int().positive().optional(),
+    width: z.number().int().positive().optional(),
+    height: z.number().int().positive().optional(),
+    startedAt: z.string().optional(),
+    indicatorState: z.enum(["idle", "active", "controlling", "waiting", "user", "error"]),
+    fallbackReason: z.string().optional(),
+  }).optional(),
+};
+
 export function registerDesktopAgentTools(server: McpServer, config: ServerConfig): void {
-  const client = new DesktopAgentClient({ stateDir: config.stateDir });
+  const hostClient = new DesktopAgentClient({ stateDir: config.stateDir });
+  const computerUse = new ComputerUseSessionManager(config.stateDir, hostClient);
+  const client = new Proxy(hostClient, {
+    get(_target, property) {
+      const routed = computerUse.routedClient();
+      const value = Reflect.get(routed, property, routed);
+      return typeof value === "function" ? value.bind(routed) : value;
+    },
+  }) as DesktopAgentClient;
+
+  registerAppTool(
+    server,
+    "computer_use_status",
+    {
+      title: "Computer Use Status",
+      description:
+        "Read the DevSpace Computer Use session state. When isolated computer use is active, the normal desktop tools are routed to that nested KDE/Wayland desktop instead of the user's physical desktop.",
+      inputSchema: {},
+      outputSchema: computerUseOutputSchema,
+      _meta: {},
+      annotations: readAnnotations,
+    },
+    async () => {
+      try {
+        const computer = await computerUse.refresh();
+        return computerUseResponse(computer, formatComputerUseStatus(computer));
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "computer_use_start",
+    {
+      title: "Start Isolated Computer Use",
+      description:
+        "Start a nested KDE/Wayland desktop dedicated to DevSpace Computer Use. Apps, screenshots, accessibility, clipboard, mouse, and keyboard operations then target that isolated desktop so the user can keep using their normal desktop. The default windowed viewer lets the user watch or take control; headless mode keeps the agent desktop off-screen. If isolation cannot start, host fallback is allowed only when requested.",
+      inputSchema: {
+        width: z.number().int().min(640).max(3840).optional(),
+        height: z.number().int().min(480).max(2160).optional(),
+        headless: z.boolean().optional(),
+        allowHostFallback: z.boolean().optional().describe("Allow the legacy live-desktop path if the isolated compositor cannot start. Defaults to false for safe concurrent use."),
+        indicator: z.boolean().optional().describe("Show the capture-excluded edge glow on the user's physical desktop. Defaults to true."),
+      },
+      outputSchema: computerUseOutputSchema,
+      _meta: {},
+      annotations: inputAnnotations,
+    },
+    async (input) => {
+      try {
+        const computer = await computerUse.start({
+          width: input.width,
+          height: input.height,
+          headless: input.headless,
+          allowHostFallback: input.allowHostFallback ?? false,
+          indicator: input.indicator,
+        });
+        return computerUseResponse(computer, formatComputerUseStatus(computer));
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "computer_use_launch",
+    {
+      title: "Launch App In Computer Use",
+      description:
+        "Launch one local application inside the isolated DevSpace computer-use desktop. Use an absolute executable path. The app inherits the isolated Wayland/XWayland session and does not steal focus from the user's normal desktop.",
+      inputSchema: {
+        file: z.string().min(1),
+        args: z.array(z.string().max(16_384)).max(256).optional(),
+        cwd: z.string().min(1).optional(),
+      },
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        pid: z.number().int().positive().optional(),
+        file: z.string().optional(),
+      },
+      _meta: {},
+      annotations: inputAnnotations,
+    },
+    async ({ file, args, cwd }) => {
+      try {
+        const launched = await computerUse.launch(file, args ?? [], cwd);
+        const result = `Launched ${launched.file} in the isolated computer-use desktop as pid ${launched.pid}.`;
+        return {
+          content: [{ type: "text" as const, text: result }],
+          structuredContent: { status: "ready" as const, result, ...launched },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "computer_use_take_control",
+    {
+      title: "Give User Computer Control",
+      description:
+        "Pause agent mouse/keyboard input and mark the user as the control owner for the isolated computer-use desktop. DevSpace also enters this state automatically when it detects the user focusing/grabbing the nested desktop viewer.",
+      inputSchema: {},
+      outputSchema: computerUseOutputSchema,
+      _meta: {},
+      annotations: inputAnnotations,
+    },
+    async () => {
+      const computer = computerUse.takeUserControl();
+      return computerUseResponse(computer, "User control is active. Agent mouse and keyboard input is paused until control is returned.");
+    },
+  );
+
+  registerAppTool(
+    server,
+    "computer_use_return_control",
+    {
+      title: "Return Computer Control To Agent",
+      description:
+        "Return mouse/keyboard ownership of the isolated computer-use desktop to the agent after the user has finished interacting with it.",
+      inputSchema: {},
+      outputSchema: computerUseOutputSchema,
+      _meta: {},
+      annotations: inputAnnotations,
+    },
+    async () => {
+      const computer = computerUse.returnAgentControl();
+      return computerUseResponse(computer, "Computer-use control returned to the agent.");
+    },
+  );
+
+  registerAppTool(
+    server,
+    "computer_use_stop",
+    {
+      title: "Stop Isolated Computer Use",
+      description:
+        "Stop the dedicated nested KDE/Wayland computer-use desktop, close applications launched through that session, and turn off the edge indicator. DevSpace core remains running.",
+      inputSchema: {},
+      outputSchema: computerUseOutputSchema,
+      _meta: {},
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => {
+      try {
+        const computer = await computerUse.stop();
+        return computerUseResponse(computer, "Isolated computer use is stopped.");
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
 
   registerAppTool(
     server,
@@ -379,7 +565,7 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
       let capturePath: string | undefined;
       try {
         capture = await client.captureScreen(input);
-        capturePath = validatePrivateCapturePath(config.stateDir, capture.path);
+        capturePath = validatePrivateCapturePath(config.stateDir, capture.path, computerUse.computerStateDir);
         const info = await stat(capturePath);
         const maxBytes = 64 * 1024 * 1024;
         if (!info.isFile() || info.size <= 0 || info.size > maxBytes) {
@@ -625,7 +811,7 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
     },
     async ({ mode, x, y }) => {
       try {
-        const input = await client.input({ type: "mouse-move", mode, x, y });
+        const input = await computerUse.agentInput({ type: "mouse-move", mode, x, y });
         const result = formatInputSummary(input);
         return { content: [{ type: "text" as const, text: result }], structuredContent: { status: "ready" as const, result, input } };
       } catch (error) {
@@ -651,7 +837,7 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
     },
     async ({ button, count, nextDelayMs }) => {
       try {
-        const input = await client.input({ type: "mouse-click", button, count, nextDelayMs });
+        const input = await computerUse.agentInput({ type: "mouse-click", button, count, nextDelayMs });
         const result = formatInputSummary(input);
         return { content: [{ type: "text" as const, text: result }], structuredContent: { status: "ready" as const, result, input } };
       } catch (error) {
@@ -676,7 +862,7 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
     },
     async ({ x, y }) => {
       try {
-        const input = await client.input({ type: "mouse-scroll", x, y });
+        const input = await computerUse.agentInput({ type: "mouse-scroll", x, y });
         const result = formatInputSummary(input);
         return { content: [{ type: "text" as const, text: result }], structuredContent: { status: "ready" as const, result, input } };
       } catch (error) {
@@ -702,7 +888,7 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
     },
     async ({ text, keyDelayMs, keyHoldMs }) => {
       try {
-        const input = await client.input({ type: "type-text", text, keyDelayMs, keyHoldMs });
+        const input = await computerUse.agentInput({ type: "type-text", text, keyDelayMs, keyHoldMs });
         const result = formatInputSummary(input);
         return { content: [{ type: "text" as const, text: result }], structuredContent: { status: "ready" as const, result, input } };
       } catch (error) {
@@ -728,7 +914,7 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
     },
     async ({ key, modifiers, keyDelayMs }) => {
       try {
-        const input = await client.input({ type: "key-chord", key, modifiers, keyDelayMs });
+        const input = await computerUse.agentInput({ type: "key-chord", key, modifiers, keyDelayMs });
         const result = formatInputSummary(input);
         return { content: [{ type: "text" as const, text: result }], structuredContent: { status: "ready" as const, result, input } };
       } catch (error) {
@@ -1716,6 +1902,26 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
   );
 }
 
+function computerUseResponse(computer: ComputerUseStatus, result: string) {
+  return {
+    content: [{ type: "text" as const, text: result }],
+    structuredContent: { status: "ready" as const, result, computer },
+  };
+}
+
+function formatComputerUseStatus(computer: ComputerUseStatus): string {
+  const parts = [
+    `Computer Use ${computer.state}`,
+    `mode ${computer.mode}`,
+    `control ${computer.controlOwner}`,
+    `indicator ${computer.indicatorState}`,
+  ];
+  if (computer.width && computer.height) parts.push(`${computer.width}×${computer.height}`);
+  if (computer.sessionId) parts.push(`session ${computer.sessionId}`);
+  if (computer.fallbackReason) parts.push(`fallback: ${computer.fallbackReason}`);
+  return parts.join("; ");
+}
+
 function statusResponse(
   status: "ready" | "stopping" | "unavailable",
   result: string,
@@ -1730,10 +1936,12 @@ function statusResponse(
 function clientErrorResponse(error: unknown) {
   const clientError = error instanceof DesktopAgentClientError
     ? error
-    : new DesktopAgentClientError(
-        "DESKTOP_AGENT_ERROR",
-        error instanceof Error ? error.message : String(error),
-      );
+    : error instanceof ComputerUseUserControlError
+      ? new DesktopAgentClientError(error.code, error.message)
+      : new DesktopAgentClientError(
+          "DESKTOP_AGENT_ERROR",
+          error instanceof Error ? error.message : String(error),
+        );
   const result = `${clientError.code}: ${clientError.message}`;
   return {
     content: [{ type: "text" as const, text: result }],
@@ -1742,11 +1950,17 @@ function clientErrorResponse(error: unknown) {
   };
 }
 
-function validatePrivateCapturePath(stateDir: string, path: string): string {
-  const captureDir = resolve(stateDir, "desktop-agent", "captures");
+function validatePrivateCapturePath(stateDir: string, path: string, computerUseStateDir?: string): string {
   const candidate = resolve(path);
-  const relativePath = relative(captureDir, candidate);
-  if (!relativePath || relativePath.startsWith("..") || isAbsolute(relativePath)) {
+  const captureDirs = [
+    resolve(stateDir, "desktop-agent", "captures"),
+    ...(computerUseStateDir ? [resolve(computerUseStateDir, "desktop-agent", "desktop-agent", "captures")] : []),
+  ];
+  const allowed = captureDirs.some((captureDir) => {
+    const relativePath = relative(captureDir, candidate);
+    return Boolean(relativePath) && !relativePath.startsWith("..") && !isAbsolute(relativePath);
+  });
+  if (!allowed) {
     throw new Error("Desktop agent returned a screenshot path outside its private capture directory.");
   }
   return candidate;

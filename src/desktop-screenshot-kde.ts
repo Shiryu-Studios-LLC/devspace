@@ -12,7 +12,8 @@ import type {
 } from "./desktop-agent-protocol.js";
 
 const execFileAsync = promisify(execFile);
-const DEFAULT_HELPER_PATH = fileURLToPath(new URL("./bin/devspace-screenshot-helper", import.meta.url));
+const PACKAGED_HELPER_PATH = fileURLToPath(new URL("./bin/devspace-screenshot-helper", import.meta.url));
+const SYSTEM_HELPER_PATH = "/usr/lib/devspace/devspace-screenshot-helper";
 const DEFAULT_CAPTURE_TIMEOUT_MS = 10_000;
 const MAX_PNG_BYTES = 128 * 1024 * 1024;
 const SCREENSHOT_DESKTOP_FILE = "org.shiryustudios.DevSpace.ScreenshotHelper.desktop";
@@ -33,7 +34,7 @@ export interface KdeScreenCaptureOptions {
   runHelper?: (args: string[], options: { timeout: number; env: NodeJS.ProcessEnv }) => Promise<{ stdout: string }>;
 }
 
-export function kdeScreenCaptureAvailable(helperPath = DEFAULT_HELPER_PATH): boolean {
+export function kdeScreenCaptureAvailable(helperPath = defaultScreenshotHelperPath()): boolean {
   if (process.platform !== "linux") return false;
   if (!process.env.DBUS_SESSION_BUS_ADDRESS) return false;
   if (!process.env.WAYLAND_DISPLAY && !process.env.DISPLAY && !process.env.XDG_SESSION_TYPE) return false;
@@ -48,7 +49,7 @@ export function createKdeScreenCaptureProvider(
   desktopAgentStateDir: string,
   options: KdeScreenCaptureOptions = {},
 ): (request: DesktopScreenCaptureRequest) => Promise<DesktopScreenCapture> {
-  const helperPath = resolve(options.helperPath ?? DEFAULT_HELPER_PATH);
+  const helperPath = resolve(options.helperPath ?? defaultScreenshotHelperPath());
   const captureDir = resolve(desktopAgentStateDir, "captures");
   const timeoutMs = options.timeoutMs ?? DEFAULT_CAPTURE_TIMEOUT_MS;
   const now = options.now ?? Date.now;
@@ -99,6 +100,10 @@ export function createKdeScreenCaptureProvider(
   };
 }
 
+function defaultScreenshotHelperPath(): string {
+  return existsSync(SYSTEM_HELPER_PATH) ? SYSTEM_HELPER_PATH : PACKAGED_HELPER_PATH;
+}
+
 async function ensureKdeScreenshotAuthorization(helperPath: string): Promise<void> {
   let pending = authorizationPromises.get(helperPath);
   if (!pending) {
@@ -113,6 +118,7 @@ async function ensureKdeScreenshotAuthorization(helperPath: string): Promise<voi
 
 async function installKdeScreenshotAuthorization(helperPath: string): Promise<void> {
   if (/[\r\n]/.test(helperPath)) throw new Error("Invalid KDE screenshot helper path.");
+  if (helperPath === SYSTEM_HELPER_PATH) return;
   const applicationsDir = join(homedir(), ".local", "share", "applications");
   const desktopPath = join(applicationsDir, SCREENSHOT_DESKTOP_FILE);
   const quotedHelper = `"${helperPath.replace(/[\\"`$]/g, "\\$&")}"`;

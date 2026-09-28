@@ -203,6 +203,12 @@ test("module status keeps core health separate from secondary modules", async (t
   assert.equal(statuses.get("desktop-agent"), "ready");
 
   for (const name of [
+    "computer_use_status",
+    "computer_use_start",
+    "computer_use_launch",
+    "computer_use_take_control",
+    "computer_use_return_control",
+    "computer_use_stop",
     "desktop_agent_status",
     "desktop_agent_capabilities",
     "desktop_agent_permissions",

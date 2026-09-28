@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=DevSpace Screenshot Helper
+Exec=/usr/lib/devspace/devspace-screenshot-helper
+NoDisplay=true
+Terminal=false
+X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2

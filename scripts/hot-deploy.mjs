@@ -65,24 +65,35 @@ async function installScreenshotAuthorization(distDir) {
 
   const applicationsDir = join(homedir(), ".local", "share", "applications");
   const desktopPath = join(applicationsDir, "org.shiryustudios.DevSpace.ScreenshotHelper.desktop");
-  const desktopTemp = `${desktopPath}.${process.pid}.${Date.now()}.tmp`;
-  const quotedHelper = `"${helper.replace(/[\\"`$]/g, "\\$&")}"`;
-  const desktopEntry = [
-    "[Desktop Entry]",
-    "Type=Application",
-    "Name=DevSpace Screenshot Helper",
-    `Exec=${quotedHelper}`,
-    "NoDisplay=true",
-    "Terminal=false",
-    "X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2",
-    "",
-  ].join("\n");
-  await mkdir(applicationsDir, { recursive: true });
-  try {
-    await writeFile(desktopTemp, desktopEntry, { mode: 0o600 });
-    await rename(desktopTemp, desktopPath);
-  } finally {
-    await rm(desktopTemp, { force: true }).catch(() => undefined);
+  const systemHelper = "/usr/lib/devspace/devspace-screenshot-helper";
+  const systemDesktopPath = "/usr/share/applications/org.shiryustudios.DevSpace.ScreenshotHelper.desktop";
+  const systemHelperReady = (await stat(systemHelper).catch(() => undefined))?.isFile() === true;
+  const systemDesktopReady = (await stat(systemDesktopPath).catch(() => undefined))?.isFile() === true;
+
+  if (systemHelperReady && systemDesktopReady) {
+    // A user-writable desktop file with the same ID shadows the root-owned
+    // authorization entry and makes fresh nested KWin sessions reject ScreenShot2.
+    await rm(desktopPath, { force: true }).catch(() => undefined);
+  } else {
+    const desktopTemp = `${desktopPath}.${process.pid}.${Date.now()}.tmp`;
+    const quotedHelper = `"${helper.replace(/[\\"`$]/g, "\\$&")}"`;
+    const desktopEntry = [
+      "[Desktop Entry]",
+      "Type=Application",
+      "Name=DevSpace Screenshot Helper",
+      `Exec=${quotedHelper}`,
+      "NoDisplay=true",
+      "Terminal=false",
+      "X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2",
+      "",
+    ].join("\n");
+    await mkdir(applicationsDir, { recursive: true });
+    try {
+      await writeFile(desktopTemp, desktopEntry, { mode: 0o600 });
+      await rename(desktopTemp, desktopPath);
+    } finally {
+      await rm(desktopTemp, { force: true }).catch(() => undefined);
+    }
   }
 
   let cacheRefreshed = false;
@@ -99,7 +110,9 @@ async function installScreenshotAuthorization(distDir) {
       // KDE can still discover the desktop entry on its next cache refresh.
     }
   }
-  return { installed: true, cacheRefreshed, desktopPath, helper };
+  return systemHelperReady && systemDesktopReady
+    ? { installed: true, system: true, cacheRefreshed, desktopPath: systemDesktopPath, helper: systemHelper }
+    : { installed: true, system: false, cacheRefreshed, desktopPath, helper };
 }
 
 async function recycleDesktopAgent() {

@@ -212,10 +212,25 @@ process tools already run without opening a desktop window, and
 `desktop_capture_screen` returns screenshots directly while deleting its private
 temporary PNG afterward.
 
-Desktop mouse and keyboard tools currently target the user's live KDE/Wayland
-session. They are therefore foreground operations and can race with the user's
-own mouse or keyboard input. Truly simultaneous GUI computer use requires a
-separate graphical session (for example a dedicated nested/headless Wayland
-session or VM) with capture and input routed to that session; DevSpace does not
-currently provide that isolated GUI-session backend. Prefer headless tools while
-the user is actively using the desktop.
+For genuine GUI work on Linux/KDE Wayland, start the isolated computer-use
+session before using desktop input. DevSpace runs a nested KWin compositor with
+its own desktop agent, screen capture, clipboard, accessibility tree, and EIS
+mouse/keyboard devices. Windowed mode gives the user an Agent Desktop viewer;
+headless mode keeps the entire graphical session in the background. Normal
+shell/build/file work still stays headless and does not need this session.
+
+The physical desktop and Agent Desktop have separate input ownership. DevSpace
+keeps agent input routed to the nested compositor while the agent owns control.
+When the user grabs the Agent Desktop viewer (KWin's Right Ctrl grab), DevSpace
+automatically marks control as user-owned and refuses further agent mouse or
+keyboard actions until control is returned. Moving and typing elsewhere on the
+physical desktop does not interrupt the background agent session.
+
+While computer use is active, a compositor-level edge indicator shows its state:
+purple for active, blue while agent input is being sent, amber while waiting,
+green while the user owns control, and red on errors. KWin marks all indicator
+surfaces `excludeFromCapture`, so they are omitted from compositor screenshots
+and screencast capture paths. The restricted KWin ScreenShot2 helper should be
+installed root-owned with `npm run install:computer-use-system-helper` after a
+build; this keeps nested screenshot permission narrow rather than weakening KWin
+screenshot authorization.

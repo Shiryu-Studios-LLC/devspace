@@ -1,53 +1,43 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
 import { chmod, copyFile, mkdir, rm } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const source = resolve(repoRoot, "native", "devspace-screenshot-helper.cpp");
-const desktopEntry = resolve(repoRoot, "native", "org.shiryustudios.DevSpace.ScreenshotHelper.desktop");
-const output = resolve(repoRoot, "dist", "bin", "devspace-screenshot-helper");
-const desktopOutput = resolve(repoRoot, "dist", "share", "org.shiryustudios.DevSpace.ScreenshotHelper.desktop");
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const source = join(root, "native", "devspace-computer-use-indicator.cpp");
+const scriptSource = join(root, "native", "devspace-computer-use-indicator-kwin.js");
+const output = join(root, "dist", "bin", "devspace-computer-use-indicator");
+const scriptOutput = join(root, "dist", "share", "devspace-computer-use-indicator-kwin.js");
 
 if (process.platform !== "linux") {
-  console.log("Skipping KDE screenshot helper build on non-Linux platform.");
+  console.log("Skipping computer-use indicator build on non-Linux platform.");
   process.exit(0);
 }
 
 try {
   const { stdout } = await execFileAsync(
     "/usr/bin/pkg-config",
-    ["--cflags", "--libs", "Qt6Core", "Qt6DBus", "Qt6Gui"],
+    ["--cflags", "--libs", "Qt6Core", "Qt6Gui", "Qt6Widgets", "Qt6DBus"],
     { encoding: "utf8" },
   );
-  const qtFlags = splitShellWords(stdout.trim());
+  const flags = splitShellWords(stdout.trim());
   await mkdir(dirname(output), { recursive: true });
+  await mkdir(dirname(scriptOutput), { recursive: true });
   await execFileAsync(
     "/usr/bin/g++",
-    [
-      "-std=c++20",
-      "-O2",
-      "-fPIC",
-      "-no-pie",
-      source,
-      "-o",
-      output,
-      ...qtFlags,
-    ],
+    ["-std=c++20", "-O2", "-fPIC", "-no-pie", source, "-o", output, ...flags, "-lLayerShellQtInterface"],
     { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 },
   );
   await chmod(output, 0o755);
-  await mkdir(dirname(desktopOutput), { recursive: true });
-  await copyFile(desktopEntry, desktopOutput);
-  await chmod(desktopOutput, 0o644);
+  await copyFile(scriptSource, scriptOutput);
   console.log(`Built ${output}`);
 } catch (error) {
   await rm(output, { force: true }).catch(() => undefined);
   const detail = error instanceof Error ? error.message : String(error);
-  console.warn(`Skipping optional KDE screenshot helper: ${detail}`);
+  console.warn(`Skipping optional computer-use indicator: ${detail}`);
 }
 
 function splitShellWords(value) {
