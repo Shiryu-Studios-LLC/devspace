@@ -195,6 +195,44 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
     },
   );
 
+  // ChatGPT reserves the `computer_use_*` tool prefix, so expose a visible
+  // compatibility name for hosts that filter that namespace. Keep the legacy
+  // tool above for MCP clients that already call it directly.
+  registerAppTool(
+    server,
+    "agent_desktop_launch",
+    {
+      title: "Launch App In Agent Desktop",
+      description:
+        "Launch one local GUI application inside the isolated DevSpace Agent Desktop. Use an absolute executable path. If no isolated session is running, DevSpace starts one automatically. The app never inherits the user's physical desktop display.",
+      inputSchema: {
+        file: z.string().min(1),
+        args: z.array(z.string().max(16_384)).max(256).optional(),
+        cwd: z.string().min(1).optional(),
+      },
+      outputSchema: {
+        status: z.enum(["ready", "error"]),
+        result: z.string(),
+        pid: z.number().int().positive().optional(),
+        file: z.string().optional(),
+      },
+      _meta: {},
+      annotations: inputAnnotations,
+    },
+    async ({ file, args, cwd }) => {
+      try {
+        const launched = await computerUse.launch(file, args ?? [], cwd);
+        const result = `Launched ${launched.file} in the isolated Agent Desktop as pid ${launched.pid}.`;
+        return {
+          content: [{ type: "text" as const, text: result }],
+          structuredContent: { status: "ready" as const, result, ...launched },
+        };
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
   registerAppTool(
     server,
     "computer_use_show",
@@ -296,6 +334,33 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
       try {
         const computer = await computerUse.stop();
         return computerUseResponse(computer, "Isolated computer use is stopped.");
+      } catch (error) {
+        return clientErrorResponse(error);
+      }
+    },
+  );
+
+  registerAppTool(
+    server,
+    "agent_desktop_stop",
+    {
+      title: "Stop Agent Desktop",
+      description:
+        "Stop the isolated DevSpace Agent Desktop and close every application/process group launched through that session. DevSpace core remains running.",
+      inputSchema: {},
+      outputSchema: computerUseOutputSchema,
+      _meta: {},
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => {
+      try {
+        const computer = await computerUse.stop();
+        return computerUseResponse(computer, "Agent Desktop is stopped.");
       } catch (error) {
         return clientErrorResponse(error);
       }

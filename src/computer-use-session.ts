@@ -466,6 +466,12 @@ export class ComputerUseSessionManager {
         DEVSPACE_COMPUTER_USE_MODE: mode,
         DEVSPACE_COMPUTER_USE_WIDTH: String(this.width),
         DEVSPACE_COMPUTER_USE_HEIGHT: String(this.height),
+        // The Agent Desktop is an automation surface, not a GPU workload. Keep the
+        // nested KWin/Plasma session on software rendering so repeated background
+        // sessions cannot consume the user's NVIDIA VRAM or fail with nested FBO
+        // allocation errors while image/video/VR workloads are active.
+        LIBGL_ALWAYS_SOFTWARE: "1",
+        QT_QUICK_BACKEND: "software",
       },
     };
   }

@@ -211,6 +211,8 @@ test("module status keeps core health separate from secondary modules", async (t
     "computer_use_take_control",
     "computer_use_return_control",
     "computer_use_stop",
+    "agent_desktop_launch",
+    "agent_desktop_stop",
     "desktop_agent_status",
     "desktop_agent_capabilities",
     "desktop_agent_permissions",
