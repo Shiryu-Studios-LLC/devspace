@@ -19,6 +19,9 @@ const plasmaConfigDir = join(plasmaStateDir, "config");
 const plasmaDataDir = join(plasmaStateDir, "data");
 const plasmaCacheDir = join(plasmaStateDir, "cache");
 const plasmaRuntimeStateDir = join(plasmaStateDir, "state");
+const hostHomeDir = process.env.HOME?.trim();
+const hostUserDataDir = process.env.XDG_DATA_HOME?.trim()
+  || (hostHomeDir ? join(hostHomeDir, ".local", "share") : undefined);
 const wallpaperDir = join(plasmaStateDir, "wallpaper");
 const wallpaperSvgPath = join(wallpaperDir, "devspace-agent-desktop.svg");
 const wallpaperPngPath = join(wallpaperDir, "devspace-agent-desktop.png");
@@ -163,6 +166,10 @@ function plasmaEnvironment(): NodeJS.ProcessEnv {
     HOME: plasmaHomeDir,
     XDG_CONFIG_HOME: plasmaConfigDir,
     XDG_DATA_HOME: plasmaDataDir,
+    // Keep runtime/config state isolated, but let Plasma resolve the same user-installed
+    // themes, plasmoids, icons, desktop files, and look-and-feel packages as the real
+    // desktop. This is resource discovery only; writes still land in plasmaDataDir.
+    XDG_DATA_DIRS: plasmaDataSearchDirs(),
     XDG_CACHE_HOME: plasmaCacheDir,
     XDG_STATE_HOME: plasmaRuntimeStateDir,
     XDG_CURRENT_DESKTOP: "KDE",
@@ -172,6 +179,13 @@ function plasmaEnvironment(): NodeJS.ProcessEnv {
     KDE_SESSION_VERSION: "6",
     QT_QPA_PLATFORM: "wayland",
   };
+}
+
+function plasmaDataSearchDirs(): string {
+  const configured = process.env.XDG_DATA_DIRS?.split(":").map((entry) => entry.trim()).filter(Boolean) ?? [];
+  const candidates = [hostUserDataDir, ...configured, "/usr/local/share", "/usr/share"]
+    .filter((entry): entry is string => Boolean(entry));
+  return [...new Set(candidates)].join(":");
 }
 
 function prepareAgentDesktopWallpaper(): void {
