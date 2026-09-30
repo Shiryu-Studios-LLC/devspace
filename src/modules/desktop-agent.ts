@@ -90,9 +90,15 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
   const computerUse = new ComputerUseSessionManager(config.stateDir, hostClient);
   const client = new Proxy(hostClient, {
     get(_target, property) {
-      const routed = computerUse.routedClient();
-      const value = Reflect.get(routed, property, routed);
-      return typeof value === "function" ? value.bind(routed) : value;
+      const hostValue = Reflect.get(hostClient, property, hostClient);
+      if (typeof hostValue !== "function") return hostValue;
+
+      return async (...args: unknown[]) => {
+        const routed = await computerUse.desktopClient();
+        const value = Reflect.get(routed, property, routed);
+        if (typeof value !== "function") return value;
+        return Reflect.apply(value, routed, args);
+      };
     },
   }) as DesktopAgentClient;
 
@@ -160,7 +166,7 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
     {
       title: "Launch App In Computer Use",
       description:
-        "Launch one local application inside the isolated DevSpace computer-use desktop. Use an absolute executable path. If no Computer Use session is running, DevSpace automatically starts a headless isolated desktop first. The app never inherits the user's physical desktop display.",
+        "Launch one local GUI application inside the isolated DevSpace computer-use desktop. Use an absolute executable path. If no Computer Use session is running, DevSpace automatically starts a headless isolated desktop first. The app never inherits the user's physical desktop display. For command-line-only work, use the workspace shell tool instead of opening a terminal, KRunner, or another GUI launcher.",
       inputSchema: {
         file: z.string().min(1),
         args: z.array(z.string().max(16_384)).max(256).optional(),
@@ -313,8 +319,8 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
     },
     async () => {
       try {
-        const status = await client.status();
-        if (!status) return statusResponse("unavailable", "Desktop agent is not running.");
+        const status = await computerUse.isolatedDesktopClient().status();
+        if (!status) return statusResponse("unavailable", "Isolated desktop agent is not running.");
         return statusResponse(status.state, describeStatus(status), status);
       } catch (error) {
         return clientErrorResponse(error);
@@ -927,7 +933,7 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
     "desktop_type_text",
     {
       title: "Type Desktop Text",
-      description: "Type literal text into the focused control inside DevSpace's isolated Computer Use desktop. If needed, a headless isolated desktop is started automatically; host-desktop text injection is not used. Text is limited to 16384 characters.",
+      description: "Type literal text into the focused control inside DevSpace's isolated Computer Use desktop. If needed, a headless isolated desktop is started automatically; host-desktop text injection is not used. Do not use this to type shell commands into a terminal or KRunner when the workspace shell tool can execute the command directly. Text is limited to 16384 characters.",
       inputSchema: {
         text: z.string().max(16_384),
         keyDelayMs: z.number().int().min(0).max(1000).optional(),
@@ -953,7 +959,7 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
     "desktop_key_chord",
     {
       title: "Press Desktop Key Chord",
-      description: "Press and release one named keyboard key with optional Ctrl/Shift/Alt/Meta modifiers inside DevSpace's isolated Computer Use desktop. If needed, a headless isolated desktop is started automatically.",
+      description: "Press and release one named keyboard key with optional Ctrl/Shift/Alt/Meta modifiers inside DevSpace's isolated Computer Use desktop. If needed, a headless isolated desktop is started automatically. Do not use GUI launchers for command-line-only work when the workspace shell tool can execute the command directly.",
       inputSchema: {
         key: z.enum(["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z","0","1","2","3","4","5","6","7","8","9","enter","escape","tab","backspace","space","delete","insert","left","right","up","down","home","end","pageup","pagedown","f1","f2","f3","f4","f5","f6","f7","f8","f9","f10","f11","f12"]),
         modifiers: z.array(z.enum(["ctrl", "shift", "alt", "meta"])).max(4).optional(),
@@ -1943,9 +1949,13 @@ export function registerDesktopAgentTools(server: McpServer, config: ServerConfi
     },
     async () => {
       try {
-        const status = await client.stop();
-        if (!status) return statusResponse("unavailable", "Desktop agent is not running.");
-        return statusResponse("stopping", "Desktop agent is stopping.", status);
+        const status = await computerUse.isolatedDesktopClient().status();
+        if (!status) {
+          await computerUse.stop();
+          return statusResponse("unavailable", "Isolated desktop agent is not running.");
+        }
+        await computerUse.stop();
+        return statusResponse("stopping", "Isolated desktop agent is stopping.", status);
       } catch (error) {
         return clientErrorResponse(error);
       }

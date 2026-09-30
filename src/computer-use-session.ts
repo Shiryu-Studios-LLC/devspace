@@ -115,7 +115,19 @@ export class ComputerUseSessionManager {
   }
 
   routedClient(): DesktopAgentClient {
-    return this.active ? this.isolatedClient : this.hostClient;
+    if (this.active) return this.isolatedClient;
+
+    // A live isolated session can outlive the specific MCP connection or hot-module
+    // instance that started it. Fail closed here: if persisted session metadata
+    // exists, route desktop operations to the isolated agent even before refresh()
+    // has repopulated this manager's in-memory state. Never silently fall back to
+    // the physical desktop just because the manager was reconstructed.
+    const persistedSession = this.readSessionMetadata();
+    if (persistedSession && persistedSession.mode !== "host-fallback") {
+      return this.isolatedClient;
+    }
+
+    return this.hostClient;
   }
 
   hostDesktopClient(): DesktopAgentClient {
@@ -123,6 +135,20 @@ export class ComputerUseSessionManager {
   }
 
   isolatedDesktopClient(): DesktopAgentClient {
+    return this.isolatedClient;
+  }
+
+  async desktopClient(): Promise<DesktopAgentClient> {
+    const status = await this.refresh();
+    if (status.state === "ready" && status.mode === "host-fallback") {
+      // Host fallback is only reachable after an explicit computer_use_start call
+      // requested it in this live manager instance. Reconstructed managers do not
+      // restore host fallback, so a restart cannot silently regain physical-desktop access.
+      return this.hostClient;
+    }
+
+    await this.ensureIsolatedForInteraction();
+    this.touchInteraction();
     return this.isolatedClient;
   }
 
@@ -587,6 +613,7 @@ export class ComputerUseSessionManager {
 
   private startTakeoverMonitor(): void {
     if (this.takeoverTimer || !this.active) return;
+    let primed = false;
     const poll = async () => {
       try {
         const metadata = this.readSessionMetadata();
@@ -595,7 +622,16 @@ export class ComputerUseSessionManager {
           this.hostClient.recentActivity(),
           this.hostClient.windows(),
         ]);
-        this.consumeTakeoverEvents(timeline, metadata.kwinPid);
+        if (!primed) {
+          // Treat activity that happened before this monitor started as history.
+          // A freshly-created nested viewer can briefly receive focus while it is
+          // being hidden; replaying that old focus event would incorrectly hand
+          // control to the user and tear down a background session.
+          this.activityCursor = timeline.cursor;
+          primed = true;
+        } else {
+          this.consumeTakeoverEvents(timeline, metadata.kwinPid);
+        }
         const viewer = windows.find((window) => window.pid === metadata.kwinPid);
         if (this.mode === "isolated-window" && this.owner === "user" && (!viewer || viewer.minimized)) {
           // A user-owned viewer being closed/minimized is an explicit end-of-use signal.
