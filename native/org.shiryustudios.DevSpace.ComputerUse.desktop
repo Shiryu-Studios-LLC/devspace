@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=DevSpace Agent Desktop
+GenericName=Isolated Computer Use Desktop
+Comment=Isolated KDE desktop used by DevSpace Computer Use
+Icon=devspace-agent-desktop
+Terminal=false
+NoDisplay=true
+StartupNotify=false
+StartupWMClass=org.shiryustudios.DevSpace.ComputerUse
+X-KDE-StartupNotify=false

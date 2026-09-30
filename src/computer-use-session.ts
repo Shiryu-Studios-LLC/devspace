@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { createConnection } from "node:net";
 import { fileURLToPath } from "node:url";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { DesktopAgentClient } from "./desktop-agent-client.js";
 import type { DesktopActivityTimeline, DesktopInputRequest, DesktopInputResult } from "./desktop-agent-protocol.js";
@@ -13,6 +14,9 @@ const CONTROL_TIMEOUT_MS = 5_000;
 const TAKEOVER_POLL_MS = 350;
 const MAX_CONTROL_BYTES = 128 * 1024;
 const DEFAULT_IDLE_CLEANUP_MS = 5 * 60 * 1000;
+const COMPUTER_USE_DESKTOP_ID = "org.shiryustudios.DevSpace.ComputerUse";
+const COMPUTER_USE_DESKTOP_FILE = `${COMPUTER_USE_DESKTOP_ID}.desktop`;
+const COMPUTER_USE_ICON_FILE = "devspace-agent-desktop.svg";
 const execFileAsync = promisify(execFile);
 
 export type ComputerUseControlOwner = "agent" | "user";
@@ -179,6 +183,7 @@ export class ComputerUseSessionManager {
     if (options.indicator !== false) this.ensureIndicator();
 
     try {
+      await ensureComputerUseDesktopIntegration().catch(() => undefined);
       const launch = this.sessionLaunchCommand(this.mode);
       rmSync(this.sessionPath, { force: true });
       const child = spawn(launch.file, launch.args, {
@@ -445,7 +450,7 @@ export class ComputerUseSessionManager {
       "--xwayland",
       "--no-lockscreen",
       "--no-global-shortcuts",
-      "--desktopfile", "org.shiryustudios.DevSpace.ComputerUse",
+      "--desktopfile", COMPUTER_USE_DESKTOP_ID,
       "--exit-with-session", hostExecutable,
     ];
     return {
@@ -690,6 +695,49 @@ export class ComputerUseSessionManager {
       }
     }
   }
+}
+
+async function ensureComputerUseDesktopIntegration(): Promise<void> {
+  if (process.platform !== "linux") return;
+
+  const desktopSource = computerUseSharePath(join("applications", COMPUTER_USE_DESKTOP_FILE));
+  const iconSource = computerUseSharePath(join("icons", "hicolor", "scalable", "apps", COMPUTER_USE_ICON_FILE));
+  if (!desktopSource || !iconSource) return;
+
+  const dataHome = process.env.XDG_DATA_HOME?.trim() || join(homedir(), ".local", "share");
+  const desktopTarget = join(dataHome, "applications", COMPUTER_USE_DESKTOP_FILE);
+  const iconTarget = join(dataHome, "icons", "hicolor", "scalable", "apps", COMPUTER_USE_ICON_FILE);
+  const desktopChanged = copyResourceIfChanged(desktopSource, desktopTarget);
+  const iconChanged = copyResourceIfChanged(iconSource, iconTarget);
+  if (!desktopChanged && !iconChanged) return;
+
+  const cacheBuilder = "/usr/bin/kbuildsycoca6";
+  if (!existsSync(cacheBuilder)) return;
+  await execFileAsync(cacheBuilder, ["--noincremental"], {
+    env: process.env,
+    maxBuffer: 4 * 1024 * 1024,
+  }).catch(() => undefined);
+}
+
+function computerUseSharePath(relativePath: string): string | undefined {
+  const candidates = [
+    fileURLToPath(new URL(`./share/${relativePath}`, import.meta.url)),
+    fileURLToPath(new URL(`../dist/share/${relativePath}`, import.meta.url)),
+  ];
+  return candidates.find((candidate) => existsSync(candidate));
+}
+
+function copyResourceIfChanged(source: string, target: string): boolean {
+  const content = readFileSync(source);
+  try {
+    if (existsSync(target) && readFileSync(target).equals(content)) return false;
+  } catch {
+    // Replace a stale or unreadable user-level integration file below.
+  }
+  mkdirSync(dirname(target), { recursive: true, mode: 0o755 });
+  writeFileSync(target, content, { mode: 0o644 });
+  if (process.platform !== "win32") chmodSync(target, 0o644);
+  return true;
 }
 
 function ensurePrivateDirectory(path: string): void {
