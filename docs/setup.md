@@ -127,16 +127,21 @@ intended users, and enable **Managed OAuth** for that app. Keep the public
 hostname routed through Cloudflare Access; do not expose the origin directly.
 
 Set the Access team domain and the app's AUD tag in the DevSpace server
-environment:
+environment, or add this object to `~/.devspace/config.json`:
 
-```bash
-DEVSPACE_CLOUDFLARE_ACCESS_TEAM_DOMAIN=your-team.cloudflareaccess.com
-DEVSPACE_CLOUDFLARE_ACCESS_AUDIENCE=your-access-app-aud-tag
+```json
+{
+  "cloudflareAccess": {
+    "teamDomain": "your-team.cloudflareaccess.com",
+    "audience": "your-access-app-aud-tag"
+  }
+}
 ```
 
 You can also set `DEVSPACE_CLOUDFLARE_ACCESS_EMAIL` to pin the accepted
 Cloudflare identity to one email address. The app's Access policy still needs
-to enforce who may sign in. DevSpace validates the signed
+to enforce who may sign in. The matching `allowedEmail` config property can
+also be set in `config.json`. DevSpace validates the signed
 `Cf-Access-Jwt-Assertion` against Cloudflare's published signing keys, team
 issuer, audience, and token lifetime before allowing MCP requests. Requests
 without a valid Access assertion continue through DevSpace's existing OAuth

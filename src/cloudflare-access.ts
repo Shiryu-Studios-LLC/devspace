@@ -1,5 +1,5 @@
 import { createPublicKey, verify as verifySignature } from "node:crypto";
-import type { CloudflareAccessConfig } from "./config.js";
+import type { CloudflareAccessConfig } from "./user-config.js";
 
 interface AccessClaims {
   aud?: string | string[];

@@ -7,6 +7,7 @@ import {
   devspaceAgentsDir,
   devspaceSkillsDir,
   loadDevspaceFiles,
+  type CloudflareAccessConfig,
   type UpstreamMcpServerConfig,
 } from "./user-config.js";
 import { resolveSubagentsConfig, type SubagentsConfig } from "./local-agent-config.js";
@@ -50,12 +51,6 @@ export interface ServerConfig {
   upstreamMcpServers: UpstreamMcpServerConfig[];
   desktopPermissions: DesktopPermissionPolicy;
   browserCdpUrl?: string;
-}
-
-export interface CloudflareAccessConfig {
-  teamDomain: string;
-  audience: string;
-  allowedEmail?: string;
 }
 
 function parsePort(value: string | number | undefined): number {
@@ -221,10 +216,13 @@ function parseOAuthConfig(env: NodeJS.ProcessEnv, ownerToken: string | undefined
   };
 }
 
-function parseCloudflareAccessConfig(env: NodeJS.ProcessEnv): CloudflareAccessConfig | undefined {
-  const teamDomain = env.DEVSPACE_CLOUDFLARE_ACCESS_TEAM_DOMAIN?.trim().toLowerCase();
-  const audience = env.DEVSPACE_CLOUDFLARE_ACCESS_AUDIENCE?.trim();
-  const allowedEmail = env.DEVSPACE_CLOUDFLARE_ACCESS_EMAIL?.trim();
+function parseCloudflareAccessConfig(
+  env: NodeJS.ProcessEnv,
+  stored: CloudflareAccessConfig | undefined,
+): CloudflareAccessConfig | undefined {
+  const teamDomain = (env.DEVSPACE_CLOUDFLARE_ACCESS_TEAM_DOMAIN ?? stored?.teamDomain)?.trim().toLowerCase();
+  const audience = (env.DEVSPACE_CLOUDFLARE_ACCESS_AUDIENCE ?? stored?.audience)?.trim();
+  const allowedEmail = (env.DEVSPACE_CLOUDFLARE_ACCESS_EMAIL ?? stored?.allowedEmail)?.trim();
   if (!teamDomain && !audience && !allowedEmail) return undefined;
   if (!teamDomain || !audience) {
     throw new Error(
@@ -275,7 +273,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     host,
     port,
     oauth: parseOAuthConfig(env, files.auth.ownerToken),
-    cloudflareAccess: parseCloudflareAccessConfig(env),
+    cloudflareAccess: parseCloudflareAccessConfig(env, files.config.cloudflareAccess),
     allowedRoots: parseAllowedRoots(env.DEVSPACE_ALLOWED_ROOTS ?? files.config.allowedRoots),
     allowedHosts: parseAllowedHosts(env.DEVSPACE_ALLOWED_HOSTS, derivedAllowedHosts),
     publicBaseUrl,
