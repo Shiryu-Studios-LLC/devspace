@@ -17,11 +17,18 @@ export interface UpstreamMcpServerConfig {
   enabled?: boolean;
 }
 
+export interface CloudflareAccessConfig {
+  teamDomain: string;
+  audience: string;
+  allowedEmail?: string;
+}
+
 export interface DevspaceUserConfig {
   host?: string;
   port?: number;
   allowedRoots?: string[];
   publicBaseUrl?: string | null;
+  cloudflareAccess?: CloudflareAccessConfig;
   allowedHosts?: string[];
   stateDir?: string;
   worktreeRoot?: string;

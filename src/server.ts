@@ -28,6 +28,7 @@ import {
   sessionIdPrefix,
 } from "./logger.js";
 import { SingleUserOAuthProvider } from "./oauth-provider.js";
+import { CloudflareAccessVerifier } from "./cloudflare-access.js";
 import {
   McpSessionRegistry,
   type McpSessionCloseResult,
@@ -331,6 +332,9 @@ export function createServer(
   const resourceServerUrl = resourceUrlFromServerUrl(mcpUrl);
   const oauthIssuerUrl = new URL(config.publicBaseUrl);
   const oauthProvider = new SingleUserOAuthProvider(config.oauth, mcpUrl, config.stateDir);
+  const cloudflareAccessVerifier = config.cloudflareAccess
+    ? new CloudflareAccessVerifier(config.cloudflareAccess)
+    : undefined;
   const bearerAuth = requireBearerAuth({
     verifier: oauthProvider,
     requiredScopes: [config.oauth.scopes[0] ?? "devspace"],
@@ -548,12 +552,26 @@ export function createServer(
     const sessionId = req.header("mcp-session-id");
     const initializeRequest = req.method === "POST" && isInitializeRequest(req.body);
 
-    await new Promise<void>((resolve, reject) => {
-      bearerAuth(req, res, (error?: unknown) => {
-        if (error) reject(error);
-        else resolve();
+    const accessAssertion = req.header("cf-access-jwt-assertion");
+    const accessClaims = accessAssertion && cloudflareAccessVerifier
+      ? await cloudflareAccessVerifier.verify(accessAssertion)
+      : undefined;
+    if (accessClaims && config.cloudflareAccess) {
+      req.auth = {
+        token: accessAssertion!,
+        clientId: accessClaims.email ?? accessClaims.sub!,
+        scopes: config.oauth.scopes,
+        expiresAt: accessClaims.exp,
+        resource: resourceServerUrl,
+      };
+    } else {
+      await new Promise<void>((resolve, reject) => {
+        bearerAuth(req, res, (error?: unknown) => {
+          if (error) reject(error);
+          else resolve();
+        });
       });
-    });
+    }
     if (res.headersSent) return;
 
     if (req.auth?.resource && !oauthProvider.isResourceAllowed(req.auth.resource)) {

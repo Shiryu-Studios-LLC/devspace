@@ -117,6 +117,36 @@ npx @waishnav/devspace serve
 When ChatGPT, Claude, or another MCP client connects, DevSpace shows an Owner
 password approval page. Enter the Owner password printed during setup.
 
+### Sign in through Cloudflare Access
+
+For a Cloudflare-hosted public endpoint, Cloudflare Access can handle the OAuth
+sign-in so MCP clients do not ask you to enter the DevSpace Owner password.
+Create an Access MCP server application for the public MCP URL
+(`https://your-host.example.com/mcp`), add an Allow policy limited to the
+intended users, and enable **Managed OAuth** for that app. Keep the public
+hostname routed through Cloudflare Access; do not expose the origin directly.
+
+Set the Access team domain and the app's AUD tag in the DevSpace server
+environment, or add this object to `~/.devspace/config.json`:
+
+```json
+{
+  "cloudflareAccess": {
+    "teamDomain": "your-team.cloudflareaccess.com",
+    "audience": "your-access-app-aud-tag"
+  }
+}
+```
+
+You can also set `DEVSPACE_CLOUDFLARE_ACCESS_EMAIL` to pin the accepted
+Cloudflare identity to one email address. The app's Access policy still needs
+to enforce who may sign in. The matching `allowedEmail` config property can
+also be set in `config.json`. DevSpace validates the signed
+`Cf-Access-Jwt-Assertion` against Cloudflare's published signing keys, team
+issuer, audience, and token lifetime before allowing MCP requests. Requests
+without a valid Access assertion continue through DevSpace's existing OAuth
+and Owner-password approval flow.
+
 The default config files are:
 
 ```text
