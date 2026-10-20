@@ -30,6 +30,7 @@ export interface ServerConfig {
   host: string;
   port: number;
   oauth: OAuthConfig;
+  cloudflareAccess?: CloudflareAccessConfig;
   allowedRoots: string[];
   allowedHosts: string[];
   publicBaseUrl: string;
@@ -49,6 +50,12 @@ export interface ServerConfig {
   upstreamMcpServers: UpstreamMcpServerConfig[];
   desktopPermissions: DesktopPermissionPolicy;
   browserCdpUrl?: string;
+}
+
+export interface CloudflareAccessConfig {
+  teamDomain: string;
+  audience: string;
+  allowedEmail?: string;
 }
 
 function parsePort(value: string | number | undefined): number {
@@ -214,6 +221,28 @@ function parseOAuthConfig(env: NodeJS.ProcessEnv, ownerToken: string | undefined
   };
 }
 
+function parseCloudflareAccessConfig(env: NodeJS.ProcessEnv): CloudflareAccessConfig | undefined {
+  const teamDomain = env.DEVSPACE_CLOUDFLARE_ACCESS_TEAM_DOMAIN?.trim().toLowerCase();
+  const audience = env.DEVSPACE_CLOUDFLARE_ACCESS_AUDIENCE?.trim();
+  const allowedEmail = env.DEVSPACE_CLOUDFLARE_ACCESS_EMAIL?.trim();
+  if (!teamDomain && !audience && !allowedEmail) return undefined;
+  if (!teamDomain || !audience) {
+    throw new Error(
+      "DEVSPACE_CLOUDFLARE_ACCESS_TEAM_DOMAIN and DEVSPACE_CLOUDFLARE_ACCESS_AUDIENCE must be configured together.",
+    );
+  }
+  if (!/^[a-z0-9-]+\.cloudflareaccess\.com$/.test(teamDomain)) {
+    throw new Error("DEVSPACE_CLOUDFLARE_ACCESS_TEAM_DOMAIN must be a Cloudflare Access team domain.");
+  }
+  if (audience.length < 8) {
+    throw new Error("DEVSPACE_CLOUDFLARE_ACCESS_AUDIENCE must be at least 8 characters long.");
+  }
+  if (allowedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(allowedEmail)) {
+    throw new Error("DEVSPACE_CLOUDFLARE_ACCESS_EMAIL must be a valid email address.");
+  }
+  return { teamDomain, audience, ...(allowedEmail ? { allowedEmail } : {}) };
+}
+
 function defaultStateDir(): string {
   return join(homedir(), ".local", "share", "devspace");
 }
@@ -246,6 +275,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     host,
     port,
     oauth: parseOAuthConfig(env, files.auth.ownerToken),
+    cloudflareAccess: parseCloudflareAccessConfig(env),
     allowedRoots: parseAllowedRoots(env.DEVSPACE_ALLOWED_ROOTS ?? files.config.allowedRoots),
     allowedHosts: parseAllowedHosts(env.DEVSPACE_ALLOWED_HOSTS, derivedAllowedHosts),
     publicBaseUrl,
