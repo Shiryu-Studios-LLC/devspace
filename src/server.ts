@@ -39,6 +39,7 @@ import {
 } from "./logger.js";
 import { readFileTool } from "./pi-tools.js";
 import { SingleUserOAuthProvider } from "./oauth-provider.js";
+import { createCloudflareAccessVerifier, type CloudflareAccessClaims } from "./cloudflare-access.js";
 import {
   compileMcpRegistrationSurface,
   createModernMcpServerAdapter,
@@ -1058,6 +1059,9 @@ function withObservedToolHandlers(
 
 export interface CreateServerOptions {
   incomingArtifactAdapters?: readonly IncomingArtifactAdapter[];
+  cloudflareAccessVerifier?: {
+    verify(assertion: string): Promise<CloudflareAccessClaims | undefined>;
+  };
 }
 
 export function createServer(
@@ -1078,13 +1082,22 @@ export function createServer(
 
   const mcpUrl = new URL("/mcp", config.publicBaseUrl);
   const resourceServerUrl = resourceUrlFromServerUrl(mcpUrl);
-  const oauthProvider = new SingleUserOAuthProvider(config.oauth, mcpUrl, config.stateDir);
 
-  const bearerAuth = requireBearerAuth({
-    verifier: oauthProvider,
-    requiredScopes: [config.oauth.scopes[0] ?? "devspace"],
-    resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(resourceServerUrl),
-  });
+  const oauthProvider = config.oauth
+    ? new SingleUserOAuthProvider(config.oauth, mcpUrl, config.stateDir)
+    : undefined;
+
+  const bearerAuth = oauthProvider && config.oauth
+    ? requireBearerAuth({
+        verifier: oauthProvider,
+        requiredScopes: [config.oauth.scopes[0] ?? "devspace"],
+        resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(resourceServerUrl),
+      })
+    : undefined;
+
+  const cloudflareAccessVerifier = config.cloudflareAccess
+    ? options.cloudflareAccessVerifier ?? createCloudflareAccessVerifier(config.cloudflareAccess)
+    : undefined;
 
   const workspaceStore = createWorkspaceStore(config.stateDir);
   const workspaces = new WorkspaceRegistry(config, workspaceStore);
@@ -1153,7 +1166,7 @@ export function createServer(
   // same tool list across requests. The User-Agent only fills in when the
   // client name and redirect hosts are unrecognised.
   const mcpHandler = createMcpHandler(async ({ authInfo, requestInfo }) => {
-    const client = authInfo
+    const client = authInfo && oauthProvider
       ? await oauthProvider.clientsStore.getClient(authInfo.clientId)
       : undefined;
 
@@ -1240,16 +1253,18 @@ export function createServer(
     next();
   });
 
-  app.use(
-    mcpAuthRouter({
-      provider: oauthProvider,
-      issuerUrl: new URL(config.publicBaseUrl),
-      baseUrl: new URL(config.publicBaseUrl),
-      resourceServerUrl,
-      scopesSupported: config.oauth.scopes,
-      resourceName: "DevSpace",
-    }),
-  );
+  if (oauthProvider && config.oauth) {
+    app.use(
+      mcpAuthRouter({
+        provider: oauthProvider,
+        issuerUrl: new URL(config.publicBaseUrl),
+        baseUrl: new URL(config.publicBaseUrl),
+        resourceServerUrl,
+        scopesSupported: config.oauth.scopes,
+        resourceName: "DevSpace",
+      }),
+    );
+  }
 
   app.options("/mcp-app-assets/{*asset}", (_req, res) => {
     setAssetHeaders(res);
@@ -1280,27 +1295,69 @@ export function createServer(
     // SAFETY: The surrounding checks or construction already match this type.
     const requestId = res.locals.requestId as string | undefined;
 
-    await new Promise<void>((resolve, reject) => {
-      res.once("finish", resolve);
-      res.once("close", resolve);
-      bearerAuth(req, res, (error?: WireInput) => {
-        if (error) reject(error);
-        else resolve();
-      });
-    });
+    if (req.method === "OPTIONS") {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+      res.setHeader(
+        "Access-Control-Allow-Headers",
+        "Content-Type, Authorization, mcp-session-id, Cf-Access-Jwt-Assertion",
+      );
+      res.sendStatus(204);
 
-    // A client that disconnected mid-auth has nothing left to answer.
-    if (res.headersSent || res.destroyed) return;
+      return;
+    }
 
-    if (!req.auth?.resource || !oauthProvider.isResourceAllowed(req.auth.resource)) {
-      logEvent(config.logging, "warn", "auth_denied", {
-        requestId,
-        method: req.method,
-        path: requestPath(req),
-        reason: "invalid_oauth_resource",
-        ...requestLogFields(req, config),
+    if (cloudflareAccessVerifier && config.cloudflareAccess) {
+      const assertion = req.header("Cf-Access-Jwt-Assertion");
+      const claims = assertion ? await cloudflareAccessVerifier.verify(assertion) : undefined;
+
+      if (!assertion || !claims) {
+        logEvent(config.logging, "warn", "auth_denied", {
+          requestId,
+          method: req.method,
+          path: requestPath(req),
+          reason: assertion ? "invalid_cloudflare_access_assertion" : "missing_cloudflare_access_assertion",
+          ...requestLogFields(req, config),
+        });
+        sendJsonRpcError(res, 401, -32001, "Unauthorized");
+
+        return;
+      }
+
+      req.auth = {
+        token: assertion,
+        clientId: claims.email ?? claims.sub,
+        scopes: config.oauth?.scopes ?? ["devspace"],
+        expiresAt: claims.exp,
+        resource: resourceServerUrl,
+      };
+    } else if (bearerAuth && oauthProvider) {
+      await new Promise<void>((resolve, reject) => {
+        res.once("finish", resolve);
+        res.once("close", resolve);
+        bearerAuth(req, res, (error?: WireInput) => {
+          if (error) reject(error);
+          else resolve();
+        });
       });
-      sendJsonRpcError(res, 401, -32001, "Unauthorized");
+
+      // A client that disconnected mid-auth has nothing left to answer.
+      if (res.headersSent || res.destroyed) return;
+
+      if (!req.auth?.resource || !oauthProvider.isResourceAllowed(req.auth.resource)) {
+        logEvent(config.logging, "warn", "auth_denied", {
+          requestId,
+          method: req.method,
+          path: requestPath(req),
+          reason: "invalid_oauth_resource",
+          ...requestLogFields(req, config),
+        });
+        sendJsonRpcError(res, 401, -32001, "Unauthorized");
+
+        return;
+      }
+    } else {
+      sendJsonRpcError(res, 500, -32603, "Server authentication is not configured.");
 
       return;
     }
@@ -1364,7 +1421,7 @@ export function createServer(
         await toolActivities.waitForIdle();
         workspaceActivity.close();
         processSessions.shutdown();
-        oauthProvider.close();
+        oauthProvider?.close();
         workspaceStore.close?.();
       })();
 

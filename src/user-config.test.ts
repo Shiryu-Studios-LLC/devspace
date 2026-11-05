@@ -50,6 +50,24 @@ test("a legacy config.json migrates once to config.jsonc and keeps a backup", (t
   assert.equal(nextLoad.migratedLegacyConfig, false);
 });
 
+test("legacy Cloudflare Access settings migrate to the versioned config", (t) => {
+  const { configDir, env } = tempConfigDir(t);
+  writeFileSync(join(configDir, "config.json"), JSON.stringify({
+    cloudflareAccess: {
+      teamDomain: "team.cloudflareaccess.com",
+      audience: "expected-access-audience",
+      allowedEmail: "owner@example.com",
+    },
+  }));
+
+  const files = loadDevspaceFiles(env);
+  assert.deepEqual(files.config.cloudflareAccess, {
+    teamDomain: "team.cloudflareaccess.com",
+    audience: "expected-access-audience",
+    allowedEmail: "owner@example.com",
+  });
+});
+
 test("concurrent loads migrate a legacy config exactly once", async (t) => {
   const { configDir } = tempConfigDir(t);
   writeFileSync(join(configDir, "config.json"), JSON.stringify({

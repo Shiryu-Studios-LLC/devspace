@@ -58,6 +58,12 @@ changes, including allowed roots. Changes on disk do not hot-reload.
     "allowedResourceUrls": [],
     "allowedRedirectHosts": ["chatgpt.com", "claude.ai", "claude.com", "localhost", "127.0.0.1"],
   },
+  // Optional: use Cloudflare Access managed OAuth instead of DevSpace's Owner password OAuth.
+  // "cloudflareAccess": {
+  //   "teamDomain": "your-team.cloudflareaccess.com",
+  //   "audience": "your-access-application-audience-tag",
+  //   "allowedEmail": "you@example.com",
+  // },
 }
 ```
 
@@ -74,6 +80,18 @@ get `403 Invalid Host`; `["*"]` in `allowedHosts` is for local debugging only.
 from a proxy on the same machine, such as `cloudflared` or Tailscale Funnel —
 the recommended value for tunnels. `true` trusts every hop, so any client can
 choose its own IP.
+
+## Cloudflare Access managed OAuth
+
+For an MCP endpoint protected by Cloudflare Access managed OAuth, configure
+`cloudflareAccess.teamDomain` and `cloudflareAccess.audience` together. DevSpace
+validates the signed `Cf-Access-Jwt-Assertion` header that Access forwards to
+the origin. When configured, this replaces DevSpace's Owner password OAuth for
+MCP requests. Set `allowedEmail` to restrict access to one email address.
+
+The same settings can be supplied with `DEVSPACE_CLOUDFLARE_ACCESS_TEAM_DOMAIN`,
+`DEVSPACE_CLOUDFLARE_ACCESS_AUDIENCE`, and optionally
+`DEVSPACE_CLOUDFLARE_ACCESS_EMAIL`.
 
 ## Workspaces
 
@@ -205,9 +223,12 @@ values to these JSONC keys:
 | `DEVSPACE_OAUTH_REFRESH_TOKEN_TTL_SECONDS` | `oauth.refreshTokenTtlSeconds` |
 | `DEVSPACE_OAUTH_SCOPES` | `oauth.scopes` |
 | `DEVSPACE_OAUTH_ALLOWED_REDIRECT_HOSTS` | `oauth.allowedRedirectHosts` |
+| `DEVSPACE_CLOUDFLARE_ACCESS_TEAM_DOMAIN` | `cloudflareAccess.teamDomain` |
+| `DEVSPACE_CLOUDFLARE_ACCESS_AUDIENCE` | `cloudflareAccess.audience` |
+| `DEVSPACE_CLOUDFLARE_ACCESS_EMAIL` | `cloudflareAccess.allowedEmail` |
 
-These variables are not read or auto-imported. Environment is process state,
-so DevSpace has no reliable file to migrate on your behalf.
+Removed legacy variables are not auto-imported from your shell environment.
+The Cloudflare Access variables above are read when `devspace serve` starts.
 
 ## v1.0 file migration
 

@@ -31,6 +31,8 @@ test("an empty config dir loads secure-by-default server config", (t) => {
   assert.equal(defaults.experimentalCodeMode, false);
   assert.equal(defaults.artifactsEnabled, false);
   assert.equal(defaults.subagents.enabled, false);
+  assert.equal(defaults.cloudflareAccess, undefined);
+  assert.ok(defaults.oauth);
   assert.deepEqual(defaults.oauth.allowedResourceUrls, []);
   assert.deepEqual(defaults.oauth.allowedRedirectHosts, ["chatgpt.com", "claude.ai", "claude.com", "localhost", "127.0.0.1"]);
   assert.equal(defaults.oauth.refreshTokenGraceSeconds, 0);
@@ -113,11 +115,11 @@ test("the config file and persisted auth configure the server, and the env owner
   assert.equal(configured.agentDir, resolve(homedir(), "agent"));
   assert.equal(configured.subagents.enabled, true);
   assert.equal(configured.subagents.instructions, "preload");
-  assert.equal(configured.oauth.ownerToken, "persisted-owner-token-long-enough");
-  assert.equal(configured.oauth.accessTokenTtlSeconds, 120);
-  assert.equal(configured.oauth.refreshTokenGraceSeconds, 60);
-  assert.deepEqual(configured.oauth.scopes, ["devspace", "admin"]);
-  assert.deepEqual(configured.oauth.allowedResourceUrls, [
+  assert.equal(configured.oauth!.ownerToken, "persisted-owner-token-long-enough");
+  assert.equal(configured.oauth!.accessTokenTtlSeconds, 120);
+  assert.equal(configured.oauth!.refreshTokenGraceSeconds, 60);
+  assert.deepEqual(configured.oauth!.scopes, ["devspace", "admin"]);
+  assert.deepEqual(configured.oauth!.allowedResourceUrls, [
     "https://tunnel.example.com/v1/mcp/tunnel_123",
   ]);
   assert.deepEqual(configured.logging, {
@@ -130,7 +132,7 @@ test("the config file and persisted auth configure the server, and the env owner
     trustProxy: true,
   });
 
-  assert.equal(loadConfig(env).oauth.ownerToken, env.DEVSPACE_OAUTH_OWNER_TOKEN);
+  assert.equal(loadConfig(env).oauth!.ownerToken, env.DEVSPACE_OAUTH_OWNER_TOKEN);
 });
 
 test("server.trustProxy accepts loopback and rejects unsupported presets", (t) => {
@@ -158,6 +160,25 @@ test("the server requires an OAuth owner token", (t) => {
     () => loadConfig({ DEVSPACE_CONFIG_DIR: missingAuthDir }),
     /OAuth owner token is required/,
   );
+});
+
+test("Cloudflare Access config permits MCP without an OAuth owner token", (t) => {
+  const configDir = tempConfigDir(t, "devspace-cloudflare-access-config-test-");
+  const env = { DEVSPACE_CONFIG_DIR: configDir };
+  writeDevspaceConfig({
+    configVersion: 1,
+    cloudflareAccess: {
+      teamDomain: "shiryustudiosllc.cloudflareaccess.com",
+      audience: "expected-access-audience",
+    },
+  }, env);
+
+  const config = loadConfig(env);
+  assert.equal(config.oauth, undefined);
+  assert.deepEqual(config.cloudflareAccess, {
+    teamDomain: "shiryustudiosllc.cloudflareaccess.com",
+    audience: "expected-access-audience",
+  });
 });
 
 // Agent commands need no server setup. Without a subagents key every built-in provider is on.

@@ -24,6 +24,7 @@ test("HTTP MCP enforces canonical and exact alias bearer resources", async (t) =
     logging: { level: "silent" },
   }));
 
+  assert.ok(config.oauth);
   const store = new SqliteOAuthStore(config.stateDir);
 
   const client = store.registerClient({

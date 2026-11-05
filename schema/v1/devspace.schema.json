@@ -381,6 +381,29 @@
         }
       },
       "additionalProperties": false
+    },
+    "cloudflareAccess": {
+      "type": "object",
+      "properties": {
+        "teamDomain": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+\\.cloudflareaccess\\.com$"
+        },
+        "audience": {
+          "type": "string",
+          "minLength": 8
+        },
+        "allowedEmail": {
+          "type": "string",
+          "format": "email",
+          "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+        }
+      },
+      "required": [
+        "teamDomain",
+        "audience"
+      ],
+      "additionalProperties": false
     }
   },
   "required": [

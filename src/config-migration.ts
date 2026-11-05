@@ -28,6 +28,11 @@ const legacyConfigSchema = z.object({
   ui: z.object({
     enabled: z.boolean().optional(),
   }).strict().optional(),
+  cloudflareAccess: z.object({
+    teamDomain: z.string(),
+    audience: z.string(),
+    allowedEmail: z.string().optional(),
+  }).strict().optional(),
 }).passthrough();
 
 const LEGACY_CONFIG_KEYS = new Set([
@@ -45,6 +50,7 @@ const LEGACY_CONFIG_KEYS = new Set([
   "subagents",
   "tools",
   "ui",
+  "cloudflareAccess",
 ]);
 
 export function migrateLegacyConfig(value: WireInput): DevspaceConfig {
@@ -78,6 +84,7 @@ export function migrateLegacyConfig(value: WireInput): DevspaceConfig {
     }),
     skills: definedEntries({ agentDir: legacy.agentDir }),
     subagents: migrateLegacySubagents(legacy.subagents),
+    cloudflareAccess: legacy.cloudflareAccess,
   });
 }
 

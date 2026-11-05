@@ -84,6 +84,12 @@ const oauthConfigSchema = z.object({
   ]),
 }).strict().prefault({});
 
+const cloudflareAccessConfigSchema = z.object({
+  teamDomain: z.string().trim().toLowerCase().regex(/^[a-z0-9-]+\.cloudflareaccess\.com$/),
+  audience: z.string().trim().min(8),
+  allowedEmail: z.string().trim().email().optional(),
+}).strict();
+
 export const devspaceConfigSchema = z.object({
   $schema: z.string().url().default(DEVSPACE_CONFIG_SCHEMA_URL),
   configVersion: z.literal(DEVSPACE_CONFIG_VERSION),
@@ -99,9 +105,12 @@ export const devspaceConfigSchema = z.object({
   subagents: subagentsConfigSchema.optional(),
   logging: loggingConfigSchema,
   oauth: oauthConfigSchema,
+  cloudflareAccess: cloudflareAccessConfigSchema.optional(),
 }).strict();
 
 export type DevspaceConfig = z.output<typeof devspaceConfigSchema>;
+
+export type CloudflareAccessConfig = NonNullable<DevspaceConfig["cloudflareAccess"]>;
 
 export type DevspaceConfigInput = z.input<typeof devspaceConfigSchema>;
 

@@ -89,7 +89,7 @@ export function createWorkspaceWebRouter(options: WorkspaceWebOptions): Router {
       return;
     }
 
-    if (!tokenMatches(String(req.body?.owner_token ?? ""), config.oauth.ownerToken)) {
+    if (!config.ownerToken || !tokenMatches(String(req.body?.owner_token ?? ""), config.ownerToken)) {
       failedLogins.record();
       sendLoginPage(res, 401, next, "The owner password was not accepted.");
 

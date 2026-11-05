@@ -3,6 +3,7 @@ import { expandHomePath } from "./roots.js";
 import type { LoggingConfig } from "./logger.js";
 import type { OAuthConfig } from "./oauth-provider.js";
 import { devspaceAgentsDir, devspaceSkillsDir, loadDevspaceFiles, type DevspaceFiles } from "./user-config.js";
+import type { CloudflareAccessConfig } from "./config-schema.js";
 import {
   disabledSubagentsConfig,
   implicitSubagentsConfig,
@@ -24,7 +25,9 @@ export interface AgentConfig {
 export interface ServerConfig extends AgentConfig {
   host: string;
   port: number;
-  oauth: OAuthConfig;
+  oauth?: OAuthConfig;
+  ownerToken?: string;
+  cloudflareAccess?: CloudflareAccessConfig;
   allowedHosts: string[];
   publicBaseUrl: string;
   /** Explicit `tools.mode`; when set it wins over host detection. */
@@ -65,10 +68,12 @@ function agentConfig(files: DevspaceFiles, env: NodeJS.ProcessEnv, subagents: Su
   };
 }
 
-/** Strict config for `devspace serve`: requires the owner token. Subagents stay an explicit opt-in. */
+/** Strict config for `devspace serve`: OAuth requires the owner token unless Cloudflare Access is configured. */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const files = loadDevspaceFiles(env);
   const stored = files.config;
+  const ownerToken = env.DEVSPACE_OAUTH_OWNER_TOKEN ?? files.auth.ownerToken;
+  const cloudflareAccess = parseCloudflareAccessConfig(env, stored.cloudflareAccess);
   const host = stored.server.host;
   const port = stored.server.port;
 
@@ -89,10 +94,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     ...agentConfig(files, env, resolveSubagentsConfig(stored.subagents ?? disabledSubagentsConfig())),
     host,
     port,
-    oauth: {
-      ownerToken: parseRequiredSecret(
-        env.DEVSPACE_OAUTH_OWNER_TOKEN ?? files.auth.ownerToken,
-      ),
+    oauth: cloudflareAccess ? undefined : {
+      ownerToken: parseRequiredSecret(ownerToken),
       accessTokenTtlSeconds: stored.oauth.accessTokenTtlSeconds,
       refreshTokenTtlSeconds: stored.oauth.refreshTokenTtlSeconds,
       refreshTokenGraceSeconds: stored.oauth.refreshTokenGraceSeconds,
@@ -100,6 +103,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       allowedResourceUrls: stored.oauth.allowedResourceUrls,
       allowedRedirectHosts: stored.oauth.allowedRedirectHosts,
     },
+    ownerToken: ownerToken?.trim() || undefined,
+    cloudflareAccess,
     allowedHosts: normalizeAllowedHosts(derivedAllowedHosts),
     publicBaseUrl,
     toolSurfaceOverride: stored.tools.mode,
@@ -116,6 +121,41 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       trustProxy: stored.server.trustProxy,
     },
   };
+}
+
+function parseCloudflareAccessConfig(
+  env: NodeJS.ProcessEnv,
+  stored: CloudflareAccessConfig | undefined,
+): CloudflareAccessConfig | undefined {
+  const teamDomain = (env.DEVSPACE_CLOUDFLARE_ACCESS_TEAM_DOMAIN ?? stored?.teamDomain)?.trim().toLowerCase();
+  const audience = (env.DEVSPACE_CLOUDFLARE_ACCESS_AUDIENCE ?? stored?.audience)?.trim();
+  const allowedEmail = (env.DEVSPACE_CLOUDFLARE_ACCESS_EMAIL ?? stored?.allowedEmail)?.trim();
+
+  if (!teamDomain && !audience && !allowedEmail) return undefined;
+
+  if (!teamDomain || !audience) {
+    throw new Error(
+      "DEVSPACE_CLOUDFLARE_ACCESS_TEAM_DOMAIN and DEVSPACE_CLOUDFLARE_ACCESS_AUDIENCE must be configured together.",
+    );
+  }
+
+  if (!/^[a-z0-9-]+\.cloudflareaccess\.com$/.test(teamDomain)) {
+    throw new Error("DEVSPACE_CLOUDFLARE_ACCESS_TEAM_DOMAIN must be a Cloudflare Access team domain.");
+  }
+
+  if (audience.length < 8) {
+    throw new Error("DEVSPACE_CLOUDFLARE_ACCESS_AUDIENCE must be at least 8 characters long.");
+  }
+
+  if (allowedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(allowedEmail)) {
+    throw new Error("DEVSPACE_CLOUDFLARE_ACCESS_EMAIL must be a valid email address.");
+  }
+
+  const config: CloudflareAccessConfig = { teamDomain, audience };
+
+  if (allowedEmail) config.allowedEmail = allowedEmail;
+
+  return config;
 }
 
 function normalizePaths(paths: string[], fallback: string[] = []): string[] {

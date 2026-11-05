@@ -7,7 +7,7 @@ Treat a connected MCP client like a trusted coding partner with access to your
 machine. The model is simple:
 
 - you choose a narrow filesystem allowlist,
-- the MCP endpoint requires OAuth approval with your Owner password,
+- the MCP endpoint requires OAuth approval with your Owner password or a verified Cloudflare Access assertion,
 - Host headers are allowlisted from the configured public URL,
 - every action happens through an explicit, logged tool call.
 
@@ -32,6 +32,12 @@ those directories. Worktrees provide workflow isolation, not a security boundary
 client connects, DevSpace shows an approval page. Enter the password only when
 you intend to grant that client access. For env-driven deployments, set
 `DEVSPACE_OAUTH_OWNER_TOKEN` to a long random value.
+
+For Cloudflare Access managed OAuth, configure the team domain and the
+application audience in `cloudflareAccess`. DevSpace verifies the signature,
+issuer, audience, expiry, and optional allowed email in the assertion forwarded
+by Access. Keep the origin behind the Access application so requests cannot
+bypass that access policy.
 
 ## Tunnels
 

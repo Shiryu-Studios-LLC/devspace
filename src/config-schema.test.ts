@@ -53,6 +53,26 @@ test("oauth.allowedResourceUrls accepts HTTPS and loopback HTTP URLs only", () =
   }
 });
 
+test("Cloudflare Access config validates a Cloudflare team domain and audience", () => {
+  assert.deepEqual(devspaceConfigSchema.parse({
+    configVersion: 1,
+    cloudflareAccess: {
+      teamDomain: "SHIRYUSTUDIOSLLC.cloudflareaccess.com",
+      audience: "expected-access-audience",
+      allowedEmail: "owner@example.com",
+    },
+  }).cloudflareAccess, {
+    teamDomain: "shiryustudiosllc.cloudflareaccess.com",
+    audience: "expected-access-audience",
+    allowedEmail: "owner@example.com",
+  });
+
+  assert.equal(devspaceConfigSchema.safeParse({
+    configVersion: 1,
+    cloudflareAccess: { teamDomain: "example.com", audience: "expected-access-audience" },
+  }).success, false);
+});
+
 test("the committed JSON schema matches the generated config schema", () => {
   const generatedSchema = `${JSON.stringify(devspaceConfigJsonSchema(), null, 2)}\n`;
 
