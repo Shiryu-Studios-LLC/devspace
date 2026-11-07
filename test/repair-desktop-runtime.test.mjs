@@ -144,13 +144,13 @@ registerAppTool(server, "computer_use_start", {
 
     assert.deepEqual(twice, once, "a second repair must make no additional edits");
     assert.match(once[0], /delete env\.WAYLAND_DISPLAY/);
-    assert.match(once[0], /Physical desktop observation mode selected explicitly/);
+    assert.match(once[0], /Physical KDE desktop interaction mode selected explicitly/);
     assert.match(once[0], /this\.active \|\| this\.readSessionMetadata\(\)/);
     assert.match(once[0], /parsed\.sessionState === "ready" && parsed\.mode === "host-fallback"/);
-    assert.match(once[2], /selection persists until stopped or switched to isolated mode/i);
-    assert.match(once[2], /allowHostControl/);
-    assert.match(once[1], /allowHostControl: z5\.boolean\(\)/);
-    assert.match(once[1], /allowHostControl: input\.allowHostControl === true/);
+    assert.match(once[2], /observation and direct interaction/i);
+    assert.match(once[1], /allowHostFallback: z5\.boolean\(\).*after its permission is granted/s);
+    assert.doesNotMatch(once[1], /Physical desktop input is disabled/);
+    assert.doesNotMatch(once[1], /allowHostControl/);
     assert.match(once[1], /Select Desktop Interaction Mode/);
     assert.match(readFileSync(join(fixture, "dist/computer-use-session.js"), "utf8"), /hostClient\.input\(request\)/);
     assert.match(readFileSync(join(fixture, "dist/hot-modules.mjs"), "utf8"), /hostClient\.input\(request2\)/);

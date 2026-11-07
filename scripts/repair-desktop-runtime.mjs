@@ -5,8 +5,8 @@ import { repairUpstreamMcpRuntime } from "./repair-upstream-mcp-stdio.mjs";
 
 const WAYLAND_MARKER = "DEVSPACE KWIN SOCKET ENV FIX";
 const MODE_MARKER = "DEVSPACE PERSISTENT PHYSICAL OBSERVATION MODE";
-const DESCRIPTION_MARKER = "Select the physical KDE desktop for read-only observation";
-const DESCRIPTION = `${DESCRIPTION_MARKER}. This selection persists until stopped or switched to isolated mode. Mouse and keyboard actions still use the isolated desktop.`;
+const DESCRIPTION_MARKER = "Select the physical KDE desktop for observation and direct interaction";
+const DESCRIPTION = `${DESCRIPTION_MARKER}. Mouse and keyboard events use KDE's XDG Desktop Portal after its permission is granted.`;
 const PHYSICAL_CONTROL_MARKER = "DEVSPACE PORTAL AUTHORIZED PHYSICAL CONTROL";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -44,7 +44,7 @@ export function repairDesktopRuntime(rootDir = root) {
             this.mode = "host-fallback";
             this.owner = "agent";
             this.viewerVisible = false;
-            this.fallbackReason = "Physical desktop observation mode selected explicitly.";
+            this.fallbackReason = "Physical KDE desktop interaction mode selected explicitly.";
             this.writeIndicator("waiting");
             if (options.indicator !== false) this.ensureIndicator();
             return this.snapshot();
@@ -60,7 +60,7 @@ export function repairDesktopRuntime(rootDir = root) {
         this.mode = "host-fallback";
         this.owner = "agent";
         this.viewerVisible = false;
-        this.fallbackReason = "Physical desktop observation mode selected explicitly.";
+        this.fallbackReason = "Physical KDE desktop interaction mode selected explicitly.";
         this.writeIndicator("waiting");
         if (options.indicator !== false) this.ensureIndicator();
         return this.snapshot();
@@ -71,9 +71,9 @@ export function repairDesktopRuntime(rootDir = root) {
       filePath,
       marker: "DEVSPACE RESTORE PHYSICAL OBSERVATION MODE",
       before: "this.indicatorState = parsed.state;",
-      after: `this.indicatorState = parsed.state;\n            /* DEVSPACE RESTORE PHYSICAL OBSERVATION MODE */\n            if (parsed.sessionState === "ready" && parsed.mode === "host-fallback") {\n                this.active = false;\n                this.state = "ready";\n                this.mode = "host-fallback";\n                this.owner = "agent";\n                this.viewerVisible = false;\n                this.fallbackReason = "Physical desktop observation mode is enabled.";\n            }`,
+      after: `this.indicatorState = parsed.state;\n            /* DEVSPACE RESTORE PHYSICAL OBSERVATION MODE */\n            if (parsed.sessionState === "ready" && parsed.mode === "host-fallback") {\n                this.active = false;\n                this.state = "ready";\n                this.mode = "host-fallback";\n                this.owner = "agent";\n                this.viewerVisible = false;\n                this.fallbackReason = "Physical KDE desktop interaction mode is enabled.";\n            }`,
       bundleBefore: "this.indicatorState = parsed.state;",
-      bundleAfter: `this.indicatorState = parsed.state;\n      /* DEVSPACE RESTORE PHYSICAL OBSERVATION MODE */\n      if (parsed.sessionState === "ready" && parsed.mode === "host-fallback") {\n        this.active = false;\n        this.state = "ready";\n        this.mode = "host-fallback";\n        this.owner = "agent";\n        this.viewerVisible = false;\n        this.fallbackReason = "Physical desktop observation mode is enabled.";\n      }`,
+      bundleAfter: `this.indicatorState = parsed.state;\n      /* DEVSPACE RESTORE PHYSICAL OBSERVATION MODE */\n      if (parsed.sessionState === "ready" && parsed.mode === "host-fallback") {\n        this.active = false;\n        this.state = "ready";\n        this.mode = "host-fallback";\n        this.owner = "agent";\n        this.viewerVisible = false;\n        this.fallbackReason = "Physical KDE desktop interaction mode is enabled.";\n      }`,
     });
     source = replaceTextOnceOrAlreadyPatched(
       source,
@@ -84,13 +84,7 @@ export function repairDesktopRuntime(rootDir = root) {
     );
 
     if (filePath.endsWith("hot-modules.mjs")) {
-      source = replaceTextOnceOrAlreadyPatched(
-        source,
-        "Allow the legacy live-desktop path if the isolated compositor cannot start. Defaults to false for safe concurrent use.",
-        DESCRIPTION,
-        DESCRIPTION_MARKER,
-        filePath,
-      );
+      source = patchPhysicalDesktopDescription(source, filePath);
     }
 
     writeFileSync(filePath, source);
@@ -103,21 +97,15 @@ export function repairDesktopRuntime(rootDir = root) {
   }
 
   let toolSource = readFileSync(toolPath, "utf8");
-  toolSource = replaceTextOnceOrAlreadyPatched(
-    toolSource,
-    "Allow the legacy live-desktop path if the isolated compositor cannot start. Defaults to false for safe concurrent use.",
-    DESCRIPTION,
-    DESCRIPTION_MARKER,
-    toolPath,
-  );
+  toolSource = patchPhysicalDesktopDescription(toolSource, toolPath);
   toolSource = patchPhysicalControlTool(toolSource, toolPath);
   writeFileSync(toolPath, toolSource);
 
   const runtimePaths = [resolve(rootDir, "dist/computer-use-session.js"), resolve(rootDir, "dist/hot-modules.mjs")];
   for (const filePath of runtimePaths) {
     let source = readFileSync(filePath, "utf8");
-    source = patchPhysicalInputRouting(source, filePath);
     if (filePath.endsWith("hot-modules.mjs")) source = patchPhysicalControlTool(source, filePath);
+    source = patchPhysicalInputRouting(source, filePath);
     writeFileSync(filePath, source);
   }
   const daemonPath = resolve(rootDir, "dist/desktop-agent-daemon.js");
@@ -133,39 +121,55 @@ export function repairDesktopRuntime(rootDir = root) {
 }
 
 function patchPhysicalControlTool(source, filePath) {
-  const schemaPattern = /^(\s*)(allowHostFallback: z(\d*)\.boolean\(\)\.optional\(\)\.describe\([^\n]*\),)$/m;
-  if (!source.includes("allowHostControl: z")) {
-    if (!schemaPattern.test(source)) throw new Error(`Could not locate physical-control tool schema in ${filePath}.`);
-    source = source.replace(schemaPattern, `$1$2\n$1/* ${PHYSICAL_CONTROL_MARKER} */\n$1allowHostControl: z$3.boolean().optional().describe("Enable physical KDE mouse and keyboard input through the XDG Desktop Portal. Requires allowHostFallback: true. KDE may show a permission dialog; no input is sent unless approved."),`);
-  }
-  const callPattern = /(allowHostFallback: input\.allowHostFallback \?\? false,\n)(\s*)(indicator: input\.indicator,)/;
-  if (!source.includes("allowHostControl: input.allowHostControl === true") && !callPattern.test(source)) {
-    throw new Error(`Could not locate computer_use_start arguments in ${filePath}.`);
-  }
-  if (!source.includes("allowHostControl: input.allowHostControl === true")) {
-    source = source.replace(callPattern, "$1$2allowHostControl: input.allowHostControl === true,\n$2$3");
-  }
+  const schemaPattern = /^(\s*)(allowHostFallback: z\d*\.boolean\(\)\.optional\(\)\.describe\()"[^\n]*"\),?$/m;
+  if (!schemaPattern.test(source)) throw new Error(`Could not locate physical desktop selection in ${filePath}.`);
+  source = source.replace(schemaPattern, `$1$2"${DESCRIPTION}"),`);
+  source = source.replace(/^\s*\/\* DEVSPACE PORTAL AUTHORIZED PHYSICAL CONTROL \*\/\n\s*allowHostControl: z\d*\.boolean\(\)\.optional\(\)\.describe\([^\n]*\),?\n/gm, "");
+  source = source.replace(/^\s*allowHostControl: input\.allowHostControl === true,?\n/gm, "");
   source = source.replaceAll('title: "Start Isolated Computer Use"', 'title: "Select Desktop Interaction Mode"');
   source = source.replaceAll(
     'description: "Start a nested KDE/Wayland desktop dedicated to DevSpace Computer Use. Apps, screenshots, accessibility, clipboard, mouse, and keyboard operations then target that isolated desktop so the user can keep using their normal desktop. Windowed sessions can start visible or minimized in the background and can be shown/hidden later without stopping the work. True headless mode has no attachable viewer. If isolation cannot start, host fallback is allowed only when requested.",',
-    'description: "Start a nested isolated KDE/Wayland desktop, or select the physical KDE desktop for observation. Set allowHostFallback true for physical observation; set allowHostControl true as well to enable mouse and keyboard through KDE XDG Desktop Portal consent. Input defaults to the isolated desktop.",',
+    'description: "Start a nested isolated KDE/Wayland desktop, or select the physical KDE desktop. Physical mode captures and interacts with the live desktop through supported KDE interfaces; mouse and keyboard events require XDG Desktop Portal permission. Input is never sent before permission is granted.",',
   );
+  source = source.replaceAll(
+    'description: "Start a nested isolated KDE/Wayland desktop, or select the physical KDE desktop for observation. Set allowHostFallback true for physical observation; set allowHostControl true as well to enable mouse and keyboard through KDE XDG Desktop Portal consent. Input defaults to the isolated desktop.",',
+    'description: "Start a nested isolated KDE/Wayland desktop, or select the physical KDE desktop. Physical mode captures and interacts with the live desktop through supported KDE interfaces; mouse and keyboard events require XDG Desktop Portal permission. Input is never sent before permission is granted.",',
+  );
+  source = source.replaceAll("Move the pointer inside DevSpace's isolated Computer Use desktop. If needed, a headless isolated desktop is started automatically; this action never injects pointer input into the user's physical KDE desktop.", "Move the pointer in the selected Computer Use desktop. Physical desktop mode sends input through KDE's XDG Desktop Portal after permission is granted; isolated mode keeps input inside its nested desktop.");
+  source = source.replaceAll("Click inside DevSpace's isolated Computer Use desktop. If needed, a headless isolated desktop is started automatically; this action never clicks the user's physical KDE desktop.", "Click in the selected Computer Use desktop. Physical desktop mode sends input through KDE's XDG Desktop Portal after permission is granted; isolated mode keeps input inside its nested desktop.");
+  source = source.replaceAll("Scroll inside DevSpace's isolated Computer Use desktop. If needed, a headless isolated desktop is started automatically.", "Scroll in the selected Computer Use desktop. Physical desktop mode sends input through KDE's XDG Desktop Portal after permission is granted; isolated mode keeps input inside its nested desktop.");
+  source = source.replaceAll("Type literal text into the focused control inside DevSpace's isolated Computer Use desktop. If needed, a headless isolated desktop is started automatically; host-desktop text injection is not used.", "Type literal text into the focused control in the selected Computer Use desktop. Physical desktop mode sends input through KDE's XDG Desktop Portal after permission is granted; isolated mode keeps input inside its nested desktop.");
+  source = source.replaceAll("Press and release one named keyboard key with optional Ctrl/Shift/Alt/Meta modifiers inside DevSpace's isolated Computer Use desktop. If needed, a headless isolated desktop is started automatically.", "Press and release one named key in the selected Computer Use desktop. Physical desktop mode sends input through KDE's XDG Desktop Portal after permission is granted; isolated mode keeps input inside its nested desktop.");
+  source = source.replaceAll("Capture a KDE/Wayland workspace, screen, active screen, window, active window, or rectangular area through the isolated Desktop Agent.", "Capture a KDE/Wayland workspace, screen, active screen, window, active window, or rectangular area through the currently selected Desktop Agent.");
   return source;
+}
+
+function patchPhysicalDesktopDescription(source, filePath) {
+  if (source.includes(DESCRIPTION_MARKER)) return source;
+  const legacy = "Allow the legacy live-desktop path if the isolated compositor cannot start. Defaults to false for safe concurrent use.";
+  const previous = "Select the physical KDE desktop for read-only observation. This selection persists until stopped or switched to isolated mode. Mouse and keyboard actions still use the isolated desktop.";
+  if (source.includes(legacy)) return source.replace(legacy, DESCRIPTION);
+  if (source.includes(previous)) return source.replace(previous, DESCRIPTION);
+  throw new Error(`Could not locate physical desktop mode description in ${filePath}.`);
 }
 
 function patchPhysicalInputRouting(source, filePath) {
   if (source.includes(PHYSICAL_CONTROL_MARKER)) {
     const methodStart = source.indexOf("async agentInput");
-    const markerPos = source.indexOf(PHYSICAL_CONTROL_MARKER);
-    if (methodStart >= 0 && markerPos > methodStart && markerPos < source.indexOf("takeUserControl(", methodStart)) {
-      return source.replace(/(this\.hostControlEnabled = options\.allowHostControl === true;)([ \t]*\n[ \t]*)(?:this\.hostControlEnabled = options\.allowHostControl === true;[ \t]*\n[ \t]*)+/g, "$1$2");
+    const methodEnd = source.indexOf("takeUserControl(", methodStart);
+    const markerPos = source.indexOf(PHYSICAL_CONTROL_MARKER, methodStart);
+    if (methodStart >= 0 && markerPos > methodStart && markerPos < methodEnd) {
+      source = source.replace(/if \(!this\.hostControlEnabled\) throw new Error\("Physical desktop input is disabled\. Start with allowHostFallback and allowHostControl explicitly enabled\."\);\n\s*/g, "");
+      source = source.replace(/\s*this\.hostControlEnabled = options\.allowHostControl === true;\n/g, "\n");
+      source = source.replace(/await this\.ensureIsolatedForInteraction\(\);\n\s*await this\.ensureIsolatedForInteraction\(\);/g, "await this.ensureIsolatedForInteraction();");
+      return source;
     }
     source = source.replace(new RegExp(`\\s*/\\* ${PHYSICAL_CONTROL_MARKER} \\*/[\\s\\S]*?await this\\.ensureIsolatedForInteraction\\(\\);\\n`), "\n");
     source = source.replace(/await this\.ensureIsolatedForInteraction\(\);\n\s*await this\.ensureIsolatedForInteraction\(\);/, "await this.ensureIsolatedForInteraction();");
   }
   const before = "    async agentInput(request) {\n        await this.ensureIsolatedForInteraction();";
   const bundleBefore = "  async agentInput(request2) {\n    await this.ensureIsolatedForInteraction();";
-  const hostBlock = `/* ${PHYSICAL_CONTROL_MARKER} */\n        const status = await this.refresh();\n        if (status.state === "ready" && status.mode === "host-fallback") {\n            if (!this.hostControlEnabled) throw new Error("Physical desktop input is disabled. Start with allowHostFallback and allowHostControl explicitly enabled.");\n            if (this.owner !== "agent") throw new ComputerUseUserControlError();\n            this.writeIndicator("controlling");\n            try { return await this.hostClient.input(request); }\n            finally { this.writeIndicator("active"); }\n        }\n        await this.ensureIsolatedForInteraction();`;
+  const hostBlock = `/* ${PHYSICAL_CONTROL_MARKER} */\n        const status = await this.refresh();\n        if (status.state === "ready" && status.mode === "host-fallback") {\n            if (this.owner !== "agent") throw new ComputerUseUserControlError();\n            this.writeIndicator("controlling");\n            try { return await this.hostClient.input(request); }\n            finally { this.writeIndicator("active"); }\n        }\n        await this.ensureIsolatedForInteraction();`;
   const needle = source.includes(before) ? before : bundleBefore;
   if (!source.includes(needle)) throw new Error(`Could not locate computer-use input routing in ${filePath}.`);
   const indent = source.includes(before) ? "        " : "    ";
@@ -176,7 +180,7 @@ function patchPhysicalInputRouting(source, filePath) {
     .map((line, index) => index === 0 ? line : `${indent}${line.trimStart()}`)
     .join("\n");
   const oldCall = `${indent}await this.ensureIsolatedForInteraction();`;
-  const replacement = `${indent}${indentedBlock}\n${oldCall}`;
+  const replacement = `${indent}${indentedBlock}`;
   const methodStart = source.indexOf("async agentInput");
   const methodEnd = source.indexOf("takeUserControl(", methodStart);
   if (methodStart < 0 || methodEnd < 0) throw new Error(`Could not isolate computer-use input method in ${filePath}.`);
@@ -187,12 +191,7 @@ function patchPhysicalInputRouting(source, filePath) {
   const startIndex = source.indexOf("async start(options");
   const index = source.indexOf(select, startIndex);
   if (index < 0) throw new Error(`Could not locate physical desktop selection in ${filePath}.`);
-  const assignment = "this.hostControlEnabled = options.allowHostControl === true;";
-  if (!source.slice(index, index + 300).includes(assignment)) {
-    source = source.slice(0, index) + source.slice(index).replace(select, `${select}\n            ${assignment}`);
-  }
-  const duplicateAssignment = /(this\.hostControlEnabled = options\.allowHostControl === true;)([ \t]*\n[ \t]*)(?:this\.hostControlEnabled = options\.allowHostControl === true;[ \t]*\n[ \t]*)+/g;
-  return source.replace(duplicateAssignment, `${assignment}\n            `);
+  return source.replace(/\s*this\.hostControlEnabled = options\.allowHostControl === true;\n/g, "\n");
 }
 
 function patchPhysicalDaemonProvider(source, filePath) {
