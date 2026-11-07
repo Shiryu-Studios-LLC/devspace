@@ -24,7 +24,8 @@ def snapshot(args):
 def perform_action(args):
     return {"performed": True}
 `);
-    writeFileSync(join(fixture, "dist/computer-use-session.js"), `class Session {
+    writeFileSync(join(fixture, "dist/computer-use-session.js"), `const existsSync = () => true;
+class Session {
     constructor(hostClient, stateDir) {
         this.hostClient = hostClient ?? new DesktopAgentClient({ stateDir });
     }
@@ -33,6 +34,14 @@ def perform_action(args):
         if (existing.state === "ready" && existing.mode !== "host-fallback") {
             return existing;
         }
+    }
+    async refresh() {
+        if (this.mode === "host-fallback" && this.state === "ready")
+            return this.snapshot();
+        return this.snapshot();
+    }
+    async stop() {
+        this.state = "stopped";
     }
     async agentInput(request) {
         await this.ensureIsolatedForInteraction();
@@ -50,9 +59,13 @@ def perform_action(args):
     restore(parsed) {
         this.indicatorState = parsed.state;
     }
+    writeIndicator(state) {
+        this.indicatorState = state;
+    }
 }
 `);
-    writeFileSync(join(fixture, "dist/hot-modules.mjs"), `class Session {
+    writeFileSync(join(fixture, "dist/hot-modules.mjs"), `const existsSync4 = () => true;
+class Session {
   constructor(hostClient, stateDir) {
     this.hostClient = hostClient ?? new DesktopAgentClient({ stateDir });
   }
@@ -61,6 +74,13 @@ def perform_action(args):
     if (existing.state === "ready" && existing.mode !== "host-fallback") {
       return existing;
     }
+  }
+  async refresh() {
+    if (this.mode === "host-fallback" && this.state === "ready") return this.snapshot();
+    return this.snapshot();
+  }
+  async stop() {
+    this.state = "stopped";
   }
   async agentInput(request2) {
     await this.ensureIsolatedForInteraction();
@@ -77,6 +97,9 @@ def perform_action(args):
   }
   restore(parsed) {
     this.indicatorState = parsed.state;
+  }
+  writeIndicator(state) {
+    this.indicatorState = state;
   }
 }
 const description = "Allow the legacy live-desktop path if the isolated compositor cannot start. Defaults to false for safe concurrent use.";
@@ -168,6 +191,10 @@ registerAppTool(server, "computer_use_start", {
     assert.match(once[0], /Physical KDE desktop interaction mode selected explicitly/);
     assert.match(once[0], /this\.active \|\| this\.readSessionMetadata\(\)/);
     assert.match(once[0], /parsed\.sessionState === "ready" && parsed\.mode === "host-fallback"/);
+    assert.match(once[0], /desktop-selection\.json/);
+    assert.match(once[0], /writeFileSync\(path, JSON\.stringify/);
+    assert.match(once[1], /writeFileSync\(path, JSON\.stringify/);
+    assert.match(once[0], /if \(this\.mode === "host-fallback"\) this\.persistPhysicalSelection\(false\)/);
     assert.match(once[2], /observation and direct interaction/i);
     assert.match(once[2], /requestTimeoutMs: 150_000/);
     assert.match(once[1], /allowHostFallback: z5\.boolean\(\).*after its permission is granted/s);

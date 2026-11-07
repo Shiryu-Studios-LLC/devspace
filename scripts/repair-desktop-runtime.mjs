@@ -75,6 +75,7 @@ export function repairDesktopRuntime(rootDir = root) {
       bundleBefore: "this.indicatorState = parsed.state;",
       bundleAfter: `this.indicatorState = parsed.state;\n      /* DEVSPACE RESTORE PHYSICAL OBSERVATION MODE */\n      if (parsed.sessionState === "ready" && parsed.mode === "host-fallback") {\n        this.active = false;\n        this.state = "ready";\n        this.mode = "host-fallback";\n        this.owner = "agent";\n        this.viewerVisible = false;\n        this.fallbackReason = "Physical KDE desktop interaction mode is enabled.";\n      }`,
     });
+    source = patchPersistentPhysicalSelection(source, filePath);
     source = replaceTextOnceOrAlreadyPatched(
       source,
       "if (this.active) await this.stop();",
@@ -123,6 +124,60 @@ export function repairDesktopRuntime(rootDir = root) {
 
   const upstreamModules = repairUpstreamMcpRuntime(rootDir);
   return { patched: [...sessionFiles, ...runtimePaths, daemonPath, inputPath, helperPath, accessibilityHelperPath, ...upstreamModules], toolModule: toolPath };
+}
+
+function patchPersistentPhysicalSelection(source, filePath) {
+  const marker = "DEVSPACE PERSISTENT PHYSICAL MODE SELECTION";
+  if (source.includes(marker)) return source;
+
+  const bundled = filePath.endsWith("hot-modules.mjs");
+  const join = bundled ? "join4" : "join";
+  const readFile = bundled ? "readFileSync3" : "readFileSync";
+  const writeFile = "writeFileSync";
+  const remove = bundled ? "rmSync3" : "rmSync";
+  const chmod = bundled ? "chmodSync3" : "chmodSync";
+  const exists = bundled ? "existsSync4" : "existsSync";
+  const helperIndent = bundled ? "  " : "    ";
+  const methods = `${helperIndent}/* ${marker} */\n${helperIndent}persistPhysicalSelection(enabled) {\n${helperIndent}    const path = ${join}(this.computerStateDir, "desktop-selection.json");\n${helperIndent}    if (!enabled) { ${remove}(path, { force: true }); return; }\n${helperIndent}    ensurePrivateDirectory(this.computerStateDir);\n${helperIndent}    ${writeFile}(path, JSON.stringify({ version: 1, mode: "host-fallback", updatedAt: new Date().toISOString() }) + "\\n", { mode: 0o600 });\n${helperIndent}    if (process.platform !== "win32") ${chmod}(path, 0o600);\n${helperIndent}}\n${helperIndent}hasPersistedPhysicalSelection() {\n${helperIndent}    try {\n${helperIndent}        const path = ${join}(this.computerStateDir, "desktop-selection.json");\n${helperIndent}        const parsed = JSON.parse(${readFile}(path, "utf8"));\n${helperIndent}        return parsed?.version === 1 && parsed?.mode === "host-fallback";\n${helperIndent}    } catch { return false; }\n${helperIndent}}\n`;
+  const indicatorAnchor = bundled ? "  writeIndicator(state) {" : "    writeIndicator(state) {";
+  if (!source.includes(indicatorAnchor)) throw new Error(`Could not locate computer-use persistence boundary in ${filePath}.`);
+  source = source.replace(indicatorAnchor, `${methods}${indicatorAnchor}`);
+
+  const physicalBranch = /(^[ \t]*)if \(options\.allowHostFallback === true\) \{\n([ \t]*)if \(existing\.state === "ready" && existing\.mode === "host-fallback"\) return existing;/m;
+  if (!physicalBranch.test(source)) throw new Error(`Could not locate physical mode selection in ${filePath}.`);
+  source = source.replace(physicalBranch, (_match, branchIndent, nestedIndent) =>
+    `${branchIndent}if (options.allowHostFallback === true) {\n${nestedIndent}this.persistPhysicalSelection(true);\n${nestedIndent}if (existing.state === "ready" && existing.mode === "host-fallback") return existing;`,
+  );
+
+  const isolatedBranch = bundled
+    ? '      if (existing.state === "ready" && existing.mode !== "host-fallback") {'
+    : '        if (existing.state === "ready" && existing.mode !== "host-fallback") {';
+  const isolatedBranchAfter = bundled
+    ? '      this.persistPhysicalSelection(false);\n      if (existing.state === "ready" && existing.mode !== "host-fallback") {'
+    : '        this.persistPhysicalSelection(false);\n        if (existing.state === "ready" && existing.mode !== "host-fallback") {';
+  if (!source.includes(isolatedBranch)) throw new Error(`Could not locate isolated mode selection in ${filePath}.`);
+  source = source.replace(isolatedBranch, isolatedBranchAfter);
+
+  const stopStart = bundled ? "  async stop() {\n" : "    async stop() {\n";
+  const stopAfter = bundled
+    ? '  async stop() {\n    if (this.mode === "host-fallback") this.persistPhysicalSelection(false);\n'
+    : '    async stop() {\n        if (this.mode === "host-fallback") this.persistPhysicalSelection(false);\n';
+  if (!source.includes(stopStart)) throw new Error(`Could not locate computer-use stop in ${filePath}.`);
+  source = source.replace(stopStart, stopAfter);
+
+  const refreshAnchor = bundled
+    ? '    if (this.mode === "host-fallback" && this.state === "ready") return this.snapshot();'
+    : '        if (this.mode === "host-fallback" && this.state === "ready")\n            return this.snapshot();';
+  const refreshReplacement = bundled
+    ? `    if (this.hasPersistedPhysicalSelection()) {\n      this.active = false;\n      this.state = "ready";\n      this.mode = "host-fallback";\n      this.owner = "agent";\n      this.viewerVisible = false;\n      this.fallbackReason = "Physical KDE desktop interaction mode is enabled.";\n      return this.snapshot();\n    }`
+    : `        if (this.hasPersistedPhysicalSelection()) {\n            this.active = false;\n            this.state = "ready";\n            this.mode = "host-fallback";\n            this.owner = "agent";\n            this.viewerVisible = false;\n            this.fallbackReason = "Physical KDE desktop interaction mode is enabled.";\n            return this.snapshot();\n        }`;
+  if (!source.includes(refreshAnchor)) throw new Error(`Could not locate computer-use refresh in ${filePath}.`);
+  source = source.replace(refreshAnchor, refreshReplacement);
+
+  const restorePhysicalCondition = 'parsed.sessionState === "ready" && parsed.mode === "host-fallback"';
+  source = source.replaceAll(restorePhysicalCondition, `${restorePhysicalCondition} && this.hasPersistedPhysicalSelection()`);
+  if (!source.includes(exists)) throw new Error(`Expected filesystem access is unavailable in ${filePath}.`);
+  return source;
 }
 
 function patchAccessibilityRegistryFallback(source, filePath) {
@@ -281,8 +336,9 @@ function patchPhysicalHelperPath(source, filePath) {
 
 function replaceOnceOrAlreadyPatched(source, options) {
   if (source.includes(options.marker)) return source;
-  const before = source.includes(options.before) ? options.before : options.bundleBefore;
-  const after = source.includes(options.before) ? options.after : options.bundleAfter;
+  const bundled = options.filePath.endsWith("hot-modules.mjs");
+  const before = bundled ? options.bundleBefore : options.before;
+  const after = bundled ? options.bundleAfter : options.after;
 
   if (!before || !after || !source.includes(before)) {
     throw new Error(`Could not locate the expected desktop runtime code in ${options.filePath} (${options.marker}).`);
