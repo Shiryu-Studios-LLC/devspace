@@ -156,7 +156,11 @@ registerAppTool(server, "computer_use_start", {
     assert.match(readFileSync(join(fixture, "dist/hot-modules.mjs"), "utf8"), /hostClient\.input\(request2\)/);
     assert.match(readFileSync(join(fixture, "dist/desktop-agent-daemon.js"), "utf8"), /DEVSPACE_PHYSICAL_INPUT/);
     assert.match(readFileSync(join(fixture, "dist/desktop-input-eis.js"), "utf8"), /devspace-xdg-portal-input\.py/);
-    assert.ok(readFileSync(join(fixture, "dist/bin/devspace-xdg-portal-input.py"), "utf8").includes("XDG RemoteDesktop"));
+    const physicalInput = readFileSync(join(fixture, "dist/bin/devspace-xdg-portal-input.py"), "utf8");
+    assert.match(physicalInput, /org\.freedesktop\.host\.portal\.Registry/);
+    assert.match(physicalInput, /org\.shiryustudios\.DevSpace\.ComputerUse/);
+    assert.ok(physicalInput.indexOf("registry.Register(") < physicalInput.indexOf("self._remote.CreateSession"));
+    assert.ok(physicalInput.includes("XDG RemoteDesktop"));
 
     for (const path of [
       join(fixture, "dist/computer-use-session.js"),

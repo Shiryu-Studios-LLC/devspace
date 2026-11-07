@@ -16,6 +16,9 @@ from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
 
 
+_PORTAL_APP_ID = "org.shiryustudios.DevSpace.ComputerUse"
+
+
 def _load_base_helper() -> Any:
     candidates = [
         Path(__file__).with_name("devspace-eis-input-helper.py"),
@@ -80,6 +83,26 @@ class PortalEisPointer(_base.KWinEisPointer):
         DBusGMainLoop(set_as_default=True)
         self._portal_session: str | None = None
         self._portal_bus = dbus.SessionBus()
+        registry = dbus.Interface(
+            self._portal_bus.get_object(
+                "org.freedesktop.portal.Desktop",
+                "/org/freedesktop/portal/desktop",
+            ),
+            "org.freedesktop.host.portal.Registry",
+        )
+        try:
+            # Unsandboxed clients must identify themselves on this D-Bus
+            # connection before making any portal request. This lets KDE show
+            # the registered application name in its consent dialog.
+            registry.Register(
+                dbus.String(_PORTAL_APP_ID),
+                dbus.Dictionary({}, signature="sv"),
+            )
+        except dbus.DBusException as exc:
+            raise RuntimeError(
+                "Could not register DevSpace with KDE's host portal; refusing "
+                "to request unidentified physical desktop access."
+            ) from exc
         self._remote = dbus.Interface(
             self._portal_bus.get_object(
                 "org.freedesktop.portal.Desktop",
@@ -122,7 +145,10 @@ class PortalEisPointer(_base.KWinEisPointer):
         if "error" in state:
             raise RuntimeError(f"KDE desktop permission request failed: {state['error']}")
         if state.get("response") != 0:
-            raise RuntimeError("KDE physical desktop permission was denied or canceled; no input was sent.")
+            raise RuntimeError(
+                "KDE physical desktop permission was denied or canceled "
+                f"(portal response {state.get('response')}); no input was sent."
+            )
         return dict(state.get("results", {}))
 
     def _connect(self) -> None:

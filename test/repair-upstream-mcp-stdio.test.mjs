@@ -26,6 +26,9 @@ const source = [
   "  return action(client);",
   "}",
   "function errorResult(message) { return message; }",
+  "async function callConfiguredTool(upstream, toolName, args) {",
+  "  return withClient(upstream, (client, requestTimeoutMs) => client.callTool({ name: toolName, arguments: args }, undefined, { timeout: requestTimeoutMs }));",
+  "}",
 ].join("\n");
 
 test("upstream MCP repair enables persistent stdio clients and is idempotent", () => {
@@ -43,6 +46,9 @@ test("upstream MCP repair enables persistent stdio clients and is idempotent", (
       assert.match(output, /StdioClientTransport/);
       assert.match(output, /transport: "stdio"/);
       assert.match(output, /stdioUpstreamClients/);
+      assert.match(output, /callUpstreamMcpTool\(client, upstream, toolName, args, requestTimeoutMs\)/);
+      assert.match(output, /upstream\.name !== "rea"/);
+      assert.match(output, /client\.cacheToolMetadata\(listed\.tools\)/);
       const file = join(fixture, "check.mjs");
       writeFileSync(file, output);
       const checked = spawnSync(process.execPath, ["--check", file], { encoding: "utf8" });

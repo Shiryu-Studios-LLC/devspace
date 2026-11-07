@@ -21,6 +21,7 @@ export function repairUpstreamMcpRuntime(rootDir) {
     }
     source = replaceBlock(source, /function configuredUpstreams\(config\) \{[\s\S]*?(?=\nasync function withClient)/, configuredBlock(), CONFIG_MARKER, file);
     source = replaceBlock(source, /async function withClient\(upstream, action, options = \{\}\) \{[\s\S]*?(?=\n(?:export )?(?:async )?function (?:closeUpstreamMcpClients|errorResult))/, clientBlock(), CLIENT_MARKER, file);
+    source = injectReaOutputCompatibility(source, file);
     source = source.replace(/client\.ping\(\)/g, "client.ping({ timeout: requestTimeoutMs })");
     source = source.replace(/client\.listTools\(\)/g, "client.listTools({}, { timeout: requestTimeoutMs })");
     source = source.replace(/client\.callTool\(\{ name: toolName, arguments: args \}\)/g, "client.callTool({ name: toolName, arguments: args }, undefined, { timeout: requestTimeoutMs })");
@@ -30,6 +31,41 @@ export function repairUpstreamMcpRuntime(rootDir) {
     writeFileSync(file, source);
   }
   return files;
+}
+
+function injectReaOutputCompatibility(source, file) {
+  const marker = "DEVSPACE REA OUTPUT SCHEMA COMPATIBILITY";
+  if (source.includes(marker)) return source;
+  const call = "client.callTool({ name: toolName, arguments: args }, undefined, { timeout: requestTimeoutMs })";
+  if (!source.includes(call)) return source;
+  const helper = `async function callUpstreamMcpTool(client, upstream, toolName, args, timeoutMs) {
+  const params = { name: toolName, arguments: args };
+  const options = { timeout: timeoutMs };
+  if (upstream.name !== "rea") return client.callTool(params, undefined, options);
+  const listed = await client.listTools({}, options);
+  const declaration = listed.tools.find((tool) => tool.name === toolName);
+  const schema = declaration?.outputSchema;
+  const hasMismatchedResultEnvelope = schema?.type === "object"
+    && schema.required?.includes("result")
+    && schema.properties?.result;
+  if (!hasMismatchedResultEnvelope) return client.callTool(params, undefined, options);
+  // REA currently publishes result-envelope schemas while returning its payload
+  // directly as structuredContent. Preserve its actual response and scope the
+  // SDK validation bypass to this one declared tool call.
+  client.cacheToolMetadata(listed.tools.map((tool) => tool.name === toolName
+    ? { ...tool, outputSchema: undefined }
+    : tool));
+  try {
+    return await client.callTool(params, undefined, options);
+  } finally {
+    client.cacheToolMetadata(listed.tools);
+  }
+}
+/* ${marker} */`;
+  source = source.replace(call, "callUpstreamMcpTool(client, upstream, toolName, args, requestTimeoutMs)");
+  const anchor = "function errorResult(";
+  if (!source.includes(anchor)) throw new Error(`Cannot locate upstream error helper in ${file}`);
+  return source.replace(anchor, `${helper}\n${anchor}`);
 }
 
 function configuredBlock() {
