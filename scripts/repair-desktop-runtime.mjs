@@ -88,6 +88,7 @@ export function repairDesktopRuntime(rootDir = root) {
 
     if (filePath.endsWith("hot-modules.mjs")) {
       source = patchPhysicalDesktopDescription(source, filePath);
+      source = patchSelectedDesktopClientRouting(source, filePath);
     }
 
     writeFileSync(filePath, source);
@@ -101,6 +102,7 @@ export function repairDesktopRuntime(rootDir = root) {
 
   let toolSource = readFileSync(toolPath, "utf8");
   toolSource = patchPhysicalDesktopDescription(toolSource, toolPath);
+  toolSource = patchSelectedDesktopClientRouting(toolSource, toolPath);
   toolSource = patchPhysicalControlTool(toolSource, toolPath);
   toolSource = patchHostAgentClientTimeout(toolSource, toolPath);
   writeFileSync(toolPath, toolSource);
@@ -305,6 +307,23 @@ function patchPhysicalDesktopDescription(source, filePath) {
   if (source.includes(legacy)) return source.replace(legacy, DESCRIPTION);
   if (source.includes(previous)) return source.replace(previous, DESCRIPTION);
   throw new Error(`Could not locate physical desktop mode description in ${filePath}.`);
+}
+
+function patchSelectedDesktopClientRouting(source, filePath) {
+  const marker = "DEVSPACE ROUTE DESKTOP TOOLS THROUGH SELECTED MODE";
+  if (source.includes(marker)) return source;
+  const before = "const interactionClient = await computerUse.interactionClient();";
+  if (!source.includes(before)) throw new Error(`Could not locate desktop interaction client routing in ${filePath}.`);
+  source = source.replaceAll(before, `/* ${marker} */\n        const interactionClient = await computerUse.desktopClient();`);
+  source = source.replaceAll(
+    "through the isolated Desktop Agent. Only text MIME types are returned",
+    "through the selected Desktop Agent. Physical desktop mode uses the user's KDE session; isolated mode uses the nested desktop. Only text MIME types are returned",
+  );
+  source = source.replaceAll(
+    "through the isolated Desktop Agent. Payloads are bounded",
+    "through the selected Desktop Agent. Physical desktop mode uses the user's KDE session; isolated mode uses the nested desktop. Payloads are bounded",
+  );
+  return source;
 }
 
 function patchPhysicalInputRouting(source, filePath) {

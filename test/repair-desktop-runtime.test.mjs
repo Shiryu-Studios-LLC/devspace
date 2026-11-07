@@ -116,6 +116,12 @@ registerAppTool4(server, "computer_use_start", {
 }));
 registerAppTool4(server, "computer_use_stop", {}, async () => computerUse.stop());
 registerAppTool4(server, "agent_desktop_stop", {}, async () => computerUse.stop());
+const clipboardReadDescription = "Read clipboard through the isolated Desktop Agent. Only text MIME types are returned";
+const clipboardWriteDescription = "Write clipboard through the isolated Desktop Agent. Payloads are bounded";
+async function readClipboard() { const interactionClient = await computerUse.interactionClient(); return interactionClient.readClipboard(); }
+async function writeClipboard() { const interactionClient = await computerUse.interactionClient(); return interactionClient.writeClipboard("text"); }
+async function accessibilitySnapshot() { const interactionClient = await computerUse.interactionClient(); return interactionClient.accessibilitySnapshot({}); }
+async function accessibilityAction() { const interactionClient = await computerUse.interactionClient(); return interactionClient.accessibilityAction({}); }
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 function configuredUpstreams(config) {
@@ -150,6 +156,12 @@ registerAppTool(server, "computer_use_start", {
 });
 registerAppTool(server, "computer_use_stop", {}, async () => computerUse.stop());
 registerAppTool(server, "agent_desktop_stop", {}, async () => computerUse.stop());
+const clipboardReadDescription = "Read clipboard through the isolated Desktop Agent. Only text MIME types are returned";
+const clipboardWriteDescription = "Write clipboard through the isolated Desktop Agent. Payloads are bounded";
+async function readClipboard() { const interactionClient = await computerUse.interactionClient(); return interactionClient.readClipboard(); }
+async function writeClipboard() { const interactionClient = await computerUse.interactionClient(); return interactionClient.writeClipboard("text"); }
+async function accessibilitySnapshot() { const interactionClient = await computerUse.interactionClient(); return interactionClient.accessibilitySnapshot({}); }
+async function accessibilityAction() { const interactionClient = await computerUse.interactionClient(); return interactionClient.accessibilityAction({}); }
 `);
     writeFileSync(join(fixture, "dist/desktop-agent-daemon.js"), `        this.inputProvider = options.input ?? createYdotoolInputProvider({ now: options.now });\n`);
     writeFileSync(join(fixture, "dist/desktop-input-eis.js"), `export function defaultEisInputHelperPath() {\n    const built = fileURLToPath(new URL("./bin/devspace-eis-input-helper.py", import.meta.url));\n}\n`);
@@ -210,6 +222,13 @@ registerAppTool(server, "agent_desktop_stop", {}, async () => computerUse.stop()
     assert.doesNotMatch(once[1], /Physical desktop input is disabled/);
     assert.doesNotMatch(once[1], /allowHostControl/);
     assert.match(once[1], /Select Desktop Interaction Mode/);
+    assert.match(once[1], /DEVSPACE ROUTE DESKTOP TOOLS THROUGH SELECTED MODE/);
+    assert.doesNotMatch(once[1], /computerUse\.interactionClient\(\)/);
+    assert.equal([...once[1].matchAll(/computerUse\.desktopClient\(\)/g)].length, 4);
+    assert.match(once[1], /through the selected Desktop Agent/);
+    assert.match(once[2], /DEVSPACE ROUTE DESKTOP TOOLS THROUGH SELECTED MODE/);
+    assert.doesNotMatch(once[2], /computerUse\.interactionClient\(\)/);
+    assert.equal([...once[2].matchAll(/computerUse\.desktopClient\(\)/g)].length, 4);
     assert.match(readFileSync(join(fixture, "dist/computer-use-session.js"), "utf8"), /hostClient\.input\(request\)/);
     assert.match(readFileSync(join(fixture, "dist/hot-modules.mjs"), "utf8"), /hostClient\.input\(request2\)/);
     assert.match(readFileSync(join(fixture, "dist/desktop-agent-daemon.js"), "utf8"), /DEVSPACE_PHYSICAL_INPUT/);
