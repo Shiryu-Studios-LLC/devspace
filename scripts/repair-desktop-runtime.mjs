@@ -6,7 +6,7 @@ import { repairUpstreamMcpRuntime } from "./repair-upstream-mcp-stdio.mjs";
 const WAYLAND_MARKER = "DEVSPACE KWIN SOCKET ENV FIX";
 const MODE_MARKER = "DEVSPACE PERSISTENT PHYSICAL OBSERVATION MODE";
 const DESCRIPTION_MARKER = "Select the physical KDE desktop for observation and direct interaction";
-const DESCRIPTION = `${DESCRIPTION_MARKER}. Mouse and keyboard events use KDE's XDG Desktop Portal after its permission is granted.`;
+const DESCRIPTION = `${DESCRIPTION_MARKER}; this selection persists across service restarts. When omitted, DevSpace uses the saved mode; set false to choose the isolated desktop. Mouse and keyboard events use KDE's XDG Desktop Portal after its permission is granted.`;
 const PHYSICAL_CONTROL_MARKER = "DEVSPACE PORTAL AUTHORIZED PHYSICAL CONTROL";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -76,6 +76,8 @@ export function repairDesktopRuntime(rootDir = root) {
       bundleAfter: `this.indicatorState = parsed.state;\n      /* DEVSPACE RESTORE PHYSICAL OBSERVATION MODE */\n      if (parsed.sessionState === "ready" && parsed.mode === "host-fallback") {\n        this.active = false;\n        this.state = "ready";\n        this.mode = "host-fallback";\n        this.owner = "agent";\n        this.viewerVisible = false;\n        this.fallbackReason = "Physical KDE desktop interaction mode is enabled.";\n      }`,
     });
     source = patchPersistentPhysicalSelection(source, filePath);
+    source = patchPersistedPhysicalDefault(source, filePath);
+    source = patchStopPreservesPhysicalSelection(source, filePath);
     source = replaceTextOnceOrAlreadyPatched(
       source,
       "if (this.active) await this.stop();",
@@ -180,6 +182,37 @@ function patchPersistentPhysicalSelection(source, filePath) {
   return source;
 }
 
+function patchPersistedPhysicalDefault(source, filePath) {
+  const marker = "DEVSPACE PHYSICAL MODE FOLLOWS PERSISTED SELECTION";
+  if (source.includes(marker)) return source;
+  const branch = /(^[ \t]*)if \(options\.allowHostFallback === true\) \{/m;
+  if (!branch.test(source)) throw new Error(`Could not locate computer-use mode selection in ${filePath}.`);
+  return source.replace(branch, (_match, indent) =>
+    `${indent}/* ${marker} */\n${indent}if (options.allowHostFallback === true || (options.allowHostFallback === undefined && this.hasPersistedPhysicalSelection())) {`,
+  );
+}
+
+function patchStopPreservesPhysicalSelection(source, filePath) {
+  const marker = "DEVSPACE STOP PRESERVES PHYSICAL SELECTION";
+  if (source.includes(marker)) return source;
+  const start = source.indexOf("async start(options");
+  const stop = source.indexOf("async stop()", start);
+  if (start < 0 || stop < 0) throw new Error(`Could not locate computer-use stop in ${filePath}.`);
+  const stopEnd = source.indexOf("async ", stop + 1);
+  const methodEnd = stopEnd < 0 ? source.length : stopEnd;
+  let method = source.slice(stop, methodEnd);
+  const prefix = source.slice(0, stop);
+  const indentation = prefix.match(/(?:^|\n)([ \t]*)$/)?.[1] ?? "";
+  const clear = "if (this.mode === \"host-fallback\") this.persistPhysicalSelection(false);";
+  method = method.replace("async stop()", "async stop(options = {})");
+  if (method.includes(clear)) {
+    method = method.replace(clear, `/* ${marker} */\n${indentation}    if (options.clearPhysicalSelection === true && this.mode === "host-fallback") this.persistPhysicalSelection(false);`);
+  } else {
+    method = method.replace("async stop(options = {}) {", `async stop(options = {}) {\n${indentation}    /* ${marker} */\n${indentation}    if (options.clearPhysicalSelection === true && this.mode === "host-fallback") this.persistPhysicalSelection(false);`);
+  }
+  return source.slice(0, stop) + method + source.slice(methodEnd);
+}
+
 function patchAccessibilityRegistryFallback(source, filePath) {
   const marker = "DEVSPACE KDE AT-SPI REGISTRY FALLBACK";
   if (source.includes(marker)) return source;
@@ -254,6 +287,14 @@ function patchPhysicalControlTool(source, filePath) {
   source = source.replaceAll("Type literal text into the focused control inside DevSpace's isolated Computer Use desktop. If needed, a headless isolated desktop is started automatically; host-desktop text injection is not used.", "Type literal text into the focused control in the selected Computer Use desktop. Physical desktop mode sends input through KDE's XDG Desktop Portal after permission is granted; isolated mode keeps input inside its nested desktop.");
   source = source.replaceAll("Press and release one named keyboard key with optional Ctrl/Shift/Alt/Meta modifiers inside DevSpace's isolated Computer Use desktop. If needed, a headless isolated desktop is started automatically.", "Press and release one named key in the selected Computer Use desktop. Physical desktop mode sends input through KDE's XDG Desktop Portal after permission is granted; isolated mode keeps input inside its nested desktop.");
   source = source.replaceAll("Capture a KDE/Wayland workspace, screen, active screen, window, active window, or rectangular area through the isolated Desktop Agent.", "Capture a KDE/Wayland workspace, screen, active screen, window, active window, or rectangular area through the currently selected Desktop Agent.");
+  source = source.replaceAll("allowHostFallback: input.allowHostFallback ?? false,", "allowHostFallback: input.allowHostFallback,");
+  const stopStart = source.indexOf('"computer_use_stop"');
+  const stopEnd = source.indexOf('"agent_desktop_stop"', stopStart);
+  if (stopStart >= 0 && stopEnd > stopStart) {
+    const block = source.slice(stopStart, stopEnd).replace("computerUse.stop()", "computerUse.stop({ clearPhysicalSelection: true })");
+    source = source.slice(0, stopStart) + block + source.slice(stopEnd);
+    source = source.replaceAll("Stop Isolated Computer Use", "Stop Computer Use and clear the selected desktop mode");
+  }
   return source;
 }
 
@@ -300,10 +341,12 @@ function patchPhysicalInputRouting(source, filePath) {
   const method = source.slice(methodStart, methodEnd);
   if (!method.includes(oldCall)) throw new Error(`Could not locate isolated input route in ${filePath}.`);
   source = source.slice(0, methodStart) + method.replace(oldCall, replacement) + source.slice(methodEnd);
-  const select = "if (options.allowHostFallback === true) {";
+  const select = "DEVSPACE PHYSICAL MODE FOLLOWS PERSISTED SELECTION";
   const startIndex = source.indexOf("async start(options");
   const index = source.indexOf(select, startIndex);
-  if (index < 0) throw new Error(`Could not locate physical desktop selection in ${filePath}.`);
+  if (index < 0 && source.indexOf("if (options.allowHostFallback === true) {", startIndex) < 0) {
+    throw new Error(`Could not locate physical desktop selection in ${filePath}.`);
+  }
   return source.replace(/\s*this\.hostControlEnabled = options\.allowHostControl === true;\n/g, "\n");
 }
 

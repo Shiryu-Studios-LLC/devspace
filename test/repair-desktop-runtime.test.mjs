@@ -114,6 +114,8 @@ registerAppTool4(server, "computer_use_start", {
   allowHostFallback: input.allowHostFallback ?? false,
   indicator: input.indicator,
 }));
+registerAppTool4(server, "computer_use_stop", {}, async () => computerUse.stop());
+registerAppTool4(server, "agent_desktop_stop", {}, async () => computerUse.stop());
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 function configuredUpstreams(config) {
@@ -146,6 +148,8 @@ registerAppTool(server, "computer_use_start", {
     indicator: input.indicator,
   });
 });
+registerAppTool(server, "computer_use_stop", {}, async () => computerUse.stop());
+registerAppTool(server, "agent_desktop_stop", {}, async () => computerUse.stop());
 `);
     writeFileSync(join(fixture, "dist/desktop-agent-daemon.js"), `        this.inputProvider = options.input ?? createYdotoolInputProvider({ now: options.now });\n`);
     writeFileSync(join(fixture, "dist/desktop-input-eis.js"), `export function defaultEisInputHelperPath() {\n    const built = fileURLToPath(new URL("./bin/devspace-eis-input-helper.py", import.meta.url));\n}\n`);
@@ -192,12 +196,17 @@ registerAppTool(server, "computer_use_start", {
     assert.match(once[0], /this\.active \|\| this\.readSessionMetadata\(\)/);
     assert.match(once[0], /parsed\.sessionState === "ready" && parsed\.mode === "host-fallback"/);
     assert.match(once[0], /desktop-selection\.json/);
+    assert.match(once[0], /options\.allowHostFallback === undefined && this\.hasPersistedPhysicalSelection\(\)/);
     assert.match(once[0], /writeFileSync\(path, JSON\.stringify/);
     assert.match(once[1], /writeFileSync\(path, JSON\.stringify/);
-    assert.match(once[0], /if \(this\.mode === "host-fallback"\) this\.persistPhysicalSelection\(false\)/);
+    assert.match(once[0], /DEVSPACE STOP PRESERVES PHYSICAL SELECTION/);
+    assert.match(once[0], /clearPhysicalSelection === true/);
     assert.match(once[2], /observation and direct interaction/i);
     assert.match(once[2], /requestTimeoutMs: 150_000/);
     assert.match(once[1], /allowHostFallback: z5\.boolean\(\).*after its permission is granted/s);
+    assert.match(once[1], /allowHostFallback: input\.allowHostFallback,/);
+    assert.doesNotMatch(once[1], /allowHostFallback: input\.allowHostFallback \?\? false/);
+    assert.match(once[1], /computerUse\.stop\(\{ clearPhysicalSelection: true \}\)/);
     assert.doesNotMatch(once[1], /Physical desktop input is disabled/);
     assert.doesNotMatch(once[1], /allowHostControl/);
     assert.match(once[1], /Select Desktop Interaction Mode/);
