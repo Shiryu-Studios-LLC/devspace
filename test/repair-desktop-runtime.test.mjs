@@ -11,7 +11,23 @@ test("desktop runtime repair is idempotent and leaves valid JavaScript", () => {
 
   try {
     mkdirSync(join(fixture, "dist/modules"), { recursive: true });
+    mkdirSync(join(fixture, "dist/bin"), { recursive: true });
+    writeFileSync(join(fixture, "dist/bin/devspace-accessibility-helper.py"), `import argparse
+import gi
+gi.require_version("Atspi", "2.0")
+from gi.repository import Atspi
+
+def snapshot(args):
+    desktop = Atspi.get_desktop(0)
+    return {"desktop": desktop}
+
+def perform_action(args):
+    return {"performed": True}
+`);
     writeFileSync(join(fixture, "dist/computer-use-session.js"), `class Session {
+    constructor(hostClient, stateDir) {
+        this.hostClient = hostClient ?? new DesktopAgentClient({ stateDir });
+    }
     async start(options = {}) {
         const existing = await this.refresh();
         if (existing.state === "ready" && existing.mode !== "host-fallback") {
@@ -37,6 +53,9 @@ test("desktop runtime repair is idempotent and leaves valid JavaScript", () => {
 }
 `);
     writeFileSync(join(fixture, "dist/hot-modules.mjs"), `class Session {
+  constructor(hostClient, stateDir) {
+    this.hostClient = hostClient ?? new DesktopAgentClient({ stateDir });
+  }
   async start(options = {}) {
     const existing = await this.refresh();
     if (existing.state === "ready" && existing.mode !== "host-fallback") {
@@ -146,6 +165,7 @@ registerAppTool(server, "computer_use_start", {
     assert.match(once[0], /delete env\.WAYLAND_DISPLAY/);
     assert.match(once[0], /Physical KDE desktop interaction mode selected explicitly/);
     assert.match(once[0], /this\.active \|\| this\.readSessionMetadata\(\)/);
+    assert.match(once[0], /requestTimeoutMs: 150_000/);
     assert.match(once[0], /parsed\.sessionState === "ready" && parsed\.mode === "host-fallback"/);
     assert.match(once[2], /observation and direct interaction/i);
     assert.match(once[1], /allowHostFallback: z5\.boolean\(\).*after its permission is granted/s);
@@ -161,6 +181,11 @@ registerAppTool(server, "computer_use_start", {
     assert.match(physicalInput, /org\.shiryustudios\.DevSpace\.ComputerUse/);
     assert.ok(physicalInput.indexOf("registry.Register(") < physicalInput.indexOf("self._remote.CreateSession"));
     assert.ok(physicalInput.includes("XDG RemoteDesktop"));
+    const accessibilityHelper = readFileSync(join(fixture, "dist/bin/devspace-accessibility-helper.py"), "utf8");
+    assert.match(accessibilityHelper, /DEVSPACE KDE AT-SPI REGISTRY FALLBACK/);
+    assert.match(accessibilityHelper, /start_new_session=True/);
+    const checkedAccessibility = spawnSync("python", ["-m", "py_compile", join(fixture, "dist/bin/devspace-accessibility-helper.py")], { encoding: "utf8" });
+    assert.equal(checkedAccessibility.status, 0, checkedAccessibility.stderr || "Python accessibility helper did not compile");
 
     for (const path of [
       join(fixture, "dist/computer-use-session.js"),

@@ -106,6 +106,7 @@ export function repairDesktopRuntime(rootDir = root) {
     let source = readFileSync(filePath, "utf8");
     if (filePath.endsWith("hot-modules.mjs")) source = patchPhysicalControlTool(source, filePath);
     source = patchPhysicalInputRouting(source, filePath);
+    source = patchPhysicalPortalRequestTimeout(source, filePath);
     writeFileSync(filePath, source);
   }
   const daemonPath = resolve(rootDir, "dist/desktop-agent-daemon.js");
@@ -115,9 +116,65 @@ export function repairDesktopRuntime(rootDir = root) {
   const helperPath = resolve(rootDir, "dist/bin/devspace-xdg-portal-input.py");
   mkdirSync(dirname(helperPath), { recursive: true });
   copyFileSync(resolve(root, "scripts/devspace-xdg-portal-input.py"), helperPath);
+  const accessibilityHelperPath = resolve(rootDir, "dist/bin/devspace-accessibility-helper.py");
+  if (!existsSync(accessibilityHelperPath)) throw new Error(`Expected installed accessibility helper is missing: ${accessibilityHelperPath}`);
+  writeFileSync(accessibilityHelperPath, patchAccessibilityRegistryFallback(readFileSync(accessibilityHelperPath, "utf8"), accessibilityHelperPath));
 
   const upstreamModules = repairUpstreamMcpRuntime(rootDir);
-  return { patched: [...sessionFiles, ...runtimePaths, daemonPath, inputPath, helperPath, ...upstreamModules], toolModule: toolPath };
+  return { patched: [...sessionFiles, ...runtimePaths, daemonPath, inputPath, helperPath, accessibilityHelperPath, ...upstreamModules], toolModule: toolPath };
+}
+
+function patchAccessibilityRegistryFallback(source, filePath) {
+  const marker = "DEVSPACE KDE AT-SPI REGISTRY FALLBACK";
+  if (source.includes(marker)) return source;
+  const importAnchor = "import argparse\n";
+  if (!source.includes(importAnchor)) throw new Error(`Could not locate accessibility helper imports in ${filePath}.`);
+  source = source.replace(importAnchor, `${importAnchor}import os\nimport shutil\nimport subprocess\nimport time\n`);
+  const functionAnchor = "def snapshot(args):\n    desktop = Atspi.get_desktop(0)";
+  if (!source.includes(functionAnchor)) throw new Error(`Could not locate accessibility snapshot entry in ${filePath}.`);
+  const helper = `def ensure_atspi_registry():
+    try:
+        import dbus
+        session_bus = dbus.SessionBus()
+        address = dbus.Interface(
+            session_bus.get_object("org.a11y.Bus", "/org/a11y/bus"),
+            "org.a11y.Bus",
+        ).GetAddress()
+        accessibility_bus = dbus.bus.BusConnection(str(address))
+        try:
+            accessibility_bus.get_name_owner("org.a11y.atspi.Registry")
+            return
+        except dbus.DBusException:
+            pass
+        registry = shutil.which("at-spi2-registryd") or "/usr/lib/at-spi2-registryd"
+        if not os.path.isfile(registry):
+            raise RuntimeError("The AT-SPI registry executable is unavailable.")
+        subprocess.Popen(
+            [registry],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+        )
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            try:
+                accessibility_bus.get_name_owner("org.a11y.atspi.Registry")
+                return
+            except dbus.DBusException:
+                time.sleep(0.05)
+        raise RuntimeError("The AT-SPI registry did not become ready.")
+    except Exception as exc:
+        raise RuntimeError(f"Could not start the KDE AT-SPI accessibility registry: {exc}") from exc
+
+
+# ${marker}
+`;
+  source = source.replace(functionAnchor, `${helper}def snapshot(args):\n    ensure_atspi_registry()\n    desktop = Atspi.get_desktop(0)`);
+  const actionAnchor = "def perform_action(args):\n";
+  if (!source.includes(actionAnchor)) throw new Error(`Could not locate accessibility action entry in ${filePath}.`);
+  return source.replace(actionAnchor, `${actionAnchor}    ensure_atspi_registry()\n`);
 }
 
 function patchPhysicalControlTool(source, filePath) {
@@ -192,6 +249,14 @@ function patchPhysicalInputRouting(source, filePath) {
   const index = source.indexOf(select, startIndex);
   if (index < 0) throw new Error(`Could not locate physical desktop selection in ${filePath}.`);
   return source.replace(/\s*this\.hostControlEnabled = options\.allowHostControl === true;\n/g, "\n");
+}
+
+function patchPhysicalPortalRequestTimeout(source, filePath) {
+  const marker = "DEVSPACE PORTAL CONSENT REQUEST TIMEOUT";
+  if (source.includes(marker)) return source;
+  const before = "this.hostClient = hostClient ?? new DesktopAgentClient({ stateDir });";
+  if (!source.includes(before)) throw new Error(`Could not locate physical desktop agent client timeout in ${filePath}.`);
+  return source.replace(before, `/* ${marker} */\n        this.hostClient = hostClient ?? new DesktopAgentClient({ stateDir, requestTimeoutMs: 150_000 });`);
 }
 
 function patchPhysicalDaemonProvider(source, filePath) {
