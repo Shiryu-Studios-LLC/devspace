@@ -217,6 +217,13 @@ function patchStopPreservesPhysicalSelection(source, filePath) {
 
 function patchAccessibilityRegistryFallback(source, filePath) {
   const marker = "DEVSPACE KDE AT-SPI REGISTRY FALLBACK";
+  source = replaceTextOnceOrAlreadyPatched(
+    source,
+    "if requested and requested not in {name.casefold(), accessible_id.casefold()}:\n            continue",
+    "# DEVSPACE ACCESSIBILITY APPLICATION SUBSTRING FILTER\n        if requested and requested not in name.casefold() and requested not in accessible_id.casefold():\n            continue",
+    "DEVSPACE ACCESSIBILITY APPLICATION SUBSTRING FILTER",
+    filePath,
+  );
   if (source.includes(marker)) return source;
   const importAnchor = "import argparse\n";
   if (!source.includes(importAnchor)) throw new Error(`Could not locate accessibility helper imports in ${filePath}.`);

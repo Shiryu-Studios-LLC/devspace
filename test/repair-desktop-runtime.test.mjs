@@ -19,6 +19,12 @@ from gi.repository import Atspi
 
 def snapshot(args):
     desktop = Atspi.get_desktop(0)
+    requested = args.application.casefold() if args.application else None
+    name = "Opera GX"
+    accessible_id = "opera-gx"
+    for _ in ():
+        if requested and requested not in {name.casefold(), accessible_id.casefold()}:
+            continue
     return {"desktop": desktop}
 
 def perform_action(args):
@@ -240,6 +246,8 @@ async function accessibilityAction() { const interactionClient = await computerU
     assert.ok(physicalInput.includes("XDG RemoteDesktop"));
     const accessibilityHelper = readFileSync(join(fixture, "dist/bin/devspace-accessibility-helper.py"), "utf8");
     assert.match(accessibilityHelper, /DEVSPACE KDE AT-SPI REGISTRY FALLBACK/);
+    assert.match(accessibilityHelper, /DEVSPACE ACCESSIBILITY APPLICATION SUBSTRING FILTER/);
+    assert.match(accessibilityHelper, /requested not in name\.casefold\(\) and requested not in accessible_id\.casefold\(\)/);
     assert.match(accessibilityHelper, /start_new_session=True/);
     const checkedAccessibility = spawnSync("python", ["-m", "py_compile", join(fixture, "dist/bin/devspace-accessibility-helper.py")], { encoding: "utf8" });
     assert.equal(checkedAccessibility.status, 0, checkedAccessibility.stderr || "Python accessibility helper did not compile");
