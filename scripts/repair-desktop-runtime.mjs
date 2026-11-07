@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { repairUpstreamMcpRuntime } from "./repair-upstream-mcp-stdio.mjs";
 
 const WAYLAND_MARKER = "DEVSPACE KWIN SOCKET ENV FIX";
 const MODE_MARKER = "DEVSPACE PERSISTENT PHYSICAL OBSERVATION MODE";
@@ -110,7 +111,8 @@ export function repairDesktopRuntime(rootDir = root) {
   );
   writeFileSync(toolPath, toolSource);
 
-  return { patched: sessionFiles.map((path) => path), toolModule: toolPath };
+  const upstreamModules = repairUpstreamMcpRuntime(rootDir);
+  return { patched: [...sessionFiles, ...upstreamModules], toolModule: toolPath };
 }
 
 function replaceOnceOrAlreadyPatched(source, options) {
@@ -137,5 +139,5 @@ function replaceTextOnceOrAlreadyPatched(source, before, after, marker, filePath
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const result = repairDesktopRuntime();
-  process.stdout.write(`Repaired DevSpace desktop runtime in ${result.patched.length} session modules and the tool description.\n`);
+  process.stdout.write(`Repaired DevSpace desktop runtime (${result.patched.length} runtime modules) and the desktop tool description.\n`);
 }

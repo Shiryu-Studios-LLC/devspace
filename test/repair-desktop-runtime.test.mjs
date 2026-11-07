@@ -53,9 +53,48 @@ test("desktop runtime repair is idempotent and leaves valid JavaScript", () => {
   }
 }
 const description = "Allow the legacy live-desktop path if the isolated compositor cannot start. Defaults to false for safe concurrent use.";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+function configuredUpstreams(config) {
+  return config.upstreamMcpServers.flatMap((entry) => {
+    try {
+      const url = new URL(entry.url);
+      if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("Unsupported protocol");
+      return [{ name: entry.name, url, enabled: entry.enabled !== false }];
+    } catch {
+      return [];
+    }
+  });
+}
+var stdioUpstreamClients = new Map();
+async function withClient(upstream, action, options = {}) {
+  const client = new Client({ name: "devspace-upstream-bridge", version: "1.0.0" });
+  return action(client);
+}
+function errorResult(message) { return message; }
 `);
     writeFileSync(join(fixture, "dist/modules/desktop-agent.js"), `const description = "Allow the legacy live-desktop path if the isolated compositor cannot start. Defaults to false for safe concurrent use.";
 `);
+
+    writeFileSync(join(fixture, "dist/upstream-mcp.js"), [
+      'import { Client } from "@modelcontextprotocol/sdk/client/index.js";',
+      'import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";',
+      "function configuredUpstreams(config) {",
+      "    return config.upstreamMcpServers.flatMap((entry) => {",
+      "        try {",
+      "            const url = new URL(entry.url);",
+      '            if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("Unsupported protocol");',
+      '            return [{ name: entry.name, url, enabled: entry.enabled !== false }];',
+      "        }",
+      "    });",
+      "}",
+      "var stdioUpstreamClients = new Map();",
+      "async function withClient(upstream, action, options = {}) {",
+      '    const client = new Client({ name: "devspace-upstream-bridge", version: "1.0.0" });',
+      "    return action(client);",
+      "}",
+      "function errorResult(message) { return message; }",
+    ].join("\n"));
 
     repairDesktopRuntime(fixture);
 
