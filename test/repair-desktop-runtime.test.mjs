@@ -80,6 +80,7 @@ def perform_action(args):
   }
 }
 const description = "Allow the legacy live-desktop path if the isolated compositor cannot start. Defaults to false for safe concurrent use.";
+const hostClient = new DesktopAgentClient({ stateDir: config.stateDir });
 registerAppTool4(server, "computer_use_start", {
   title: "Start Isolated Computer Use",
   description: "Start a nested KDE/Wayland desktop dedicated to DevSpace Computer Use. Apps, screenshots, accessibility, clipboard, mouse, and keyboard operations then target that isolated desktop so the user can keep using their normal desktop. Windowed sessions can start visible or minimized in the background and can be shown/hidden later without stopping the work. True headless mode has no attachable viewer. If isolation cannot start, host fallback is allowed only when requested.",
@@ -110,7 +111,8 @@ async function withClient(upstream, action, options = {}) {
 }
 function errorResult(message) { return message; }
 `);
-    writeFileSync(join(fixture, "dist/modules/desktop-agent.js"), `const description = "Allow the legacy live-desktop path if the isolated compositor cannot start. Defaults to false for safe concurrent use.";
+    writeFileSync(join(fixture, "dist/modules/desktop-agent.js"), `const hostClient = new DesktopAgentClient({ stateDir: config.stateDir });
+const description = "Allow the legacy live-desktop path if the isolated compositor cannot start. Defaults to false for safe concurrent use.";
 registerAppTool(server, "computer_use_start", {
   inputSchema: {
     allowHostFallback: z.boolean().optional().describe("Select the physical KDE desktop for read-only observation. This selection persists until stopped or switched to isolated mode. Mouse and keyboard actions still use the isolated desktop."),
@@ -165,9 +167,9 @@ registerAppTool(server, "computer_use_start", {
     assert.match(once[0], /delete env\.WAYLAND_DISPLAY/);
     assert.match(once[0], /Physical KDE desktop interaction mode selected explicitly/);
     assert.match(once[0], /this\.active \|\| this\.readSessionMetadata\(\)/);
-    assert.match(once[0], /requestTimeoutMs: 150_000/);
     assert.match(once[0], /parsed\.sessionState === "ready" && parsed\.mode === "host-fallback"/);
     assert.match(once[2], /observation and direct interaction/i);
+    assert.match(once[2], /requestTimeoutMs: 150_000/);
     assert.match(once[1], /allowHostFallback: z5\.boolean\(\).*after its permission is granted/s);
     assert.doesNotMatch(once[1], /Physical desktop input is disabled/);
     assert.doesNotMatch(once[1], /allowHostControl/);

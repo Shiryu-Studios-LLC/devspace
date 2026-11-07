@@ -99,6 +99,7 @@ export function repairDesktopRuntime(rootDir = root) {
   let toolSource = readFileSync(toolPath, "utf8");
   toolSource = patchPhysicalDesktopDescription(toolSource, toolPath);
   toolSource = patchPhysicalControlTool(toolSource, toolPath);
+  toolSource = patchHostAgentClientTimeout(toolSource, toolPath);
   writeFileSync(toolPath, toolSource);
 
   const runtimePaths = [resolve(rootDir, "dist/computer-use-session.js"), resolve(rootDir, "dist/hot-modules.mjs")];
@@ -106,7 +107,7 @@ export function repairDesktopRuntime(rootDir = root) {
     let source = readFileSync(filePath, "utf8");
     if (filePath.endsWith("hot-modules.mjs")) source = patchPhysicalControlTool(source, filePath);
     source = patchPhysicalInputRouting(source, filePath);
-    source = patchPhysicalPortalRequestTimeout(source, filePath);
+    if (filePath.endsWith("hot-modules.mjs")) source = patchHostAgentClientTimeout(source, filePath);
     writeFileSync(filePath, source);
   }
   const daemonPath = resolve(rootDir, "dist/desktop-agent-daemon.js");
@@ -251,12 +252,13 @@ function patchPhysicalInputRouting(source, filePath) {
   return source.replace(/\s*this\.hostControlEnabled = options\.allowHostControl === true;\n/g, "\n");
 }
 
-function patchPhysicalPortalRequestTimeout(source, filePath) {
+function patchHostAgentClientTimeout(source, filePath) {
   const marker = "DEVSPACE PORTAL CONSENT REQUEST TIMEOUT";
-  if (source.includes(marker)) return source;
-  const before = "this.hostClient = hostClient ?? new DesktopAgentClient({ stateDir });";
+  const before = "const hostClient = new DesktopAgentClient({ stateDir: config.stateDir });";
+  const after = `/* ${marker} */\n    const hostClient = new DesktopAgentClient({ stateDir: config.stateDir, requestTimeoutMs: 150_000 });`;
+  if (source.includes(after)) return source;
   if (!source.includes(before)) throw new Error(`Could not locate physical desktop agent client timeout in ${filePath}.`);
-  return source.replace(before, `/* ${marker} */\n        this.hostClient = hostClient ?? new DesktopAgentClient({ stateDir, requestTimeoutMs: 150_000 });`);
+  return source.replace(before, after);
 }
 
 function patchPhysicalDaemonProvider(source, filePath) {
