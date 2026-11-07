@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { repairUpstreamMcpRuntime } from "./repair-upstream-mcp-stdio.mjs";
@@ -7,6 +7,7 @@ const WAYLAND_MARKER = "DEVSPACE KWIN SOCKET ENV FIX";
 const MODE_MARKER = "DEVSPACE PERSISTENT PHYSICAL OBSERVATION MODE";
 const DESCRIPTION_MARKER = "Select the physical KDE desktop for read-only observation";
 const DESCRIPTION = `${DESCRIPTION_MARKER}. This selection persists until stopped or switched to isolated mode. Mouse and keyboard actions still use the isolated desktop.`;
+const PHYSICAL_CONTROL_MARKER = "DEVSPACE PORTAL AUTHORIZED PHYSICAL CONTROL";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -109,10 +110,107 @@ export function repairDesktopRuntime(rootDir = root) {
     DESCRIPTION_MARKER,
     toolPath,
   );
+  toolSource = patchPhysicalControlTool(toolSource, toolPath);
   writeFileSync(toolPath, toolSource);
 
+  const runtimePaths = [resolve(rootDir, "dist/computer-use-session.js"), resolve(rootDir, "dist/hot-modules.mjs")];
+  for (const filePath of runtimePaths) {
+    let source = readFileSync(filePath, "utf8");
+    source = patchPhysicalInputRouting(source, filePath);
+    if (filePath.endsWith("hot-modules.mjs")) source = patchPhysicalControlTool(source, filePath);
+    writeFileSync(filePath, source);
+  }
+  const daemonPath = resolve(rootDir, "dist/desktop-agent-daemon.js");
+  writeFileSync(daemonPath, patchPhysicalDaemonProvider(readFileSync(daemonPath, "utf8"), daemonPath));
+  const inputPath = resolve(rootDir, "dist/desktop-input-eis.js");
+  writeFileSync(inputPath, patchPhysicalHelperPath(readFileSync(inputPath, "utf8"), inputPath));
+  const helperPath = resolve(rootDir, "dist/bin/devspace-xdg-portal-input.py");
+  mkdirSync(dirname(helperPath), { recursive: true });
+  copyFileSync(resolve(root, "scripts/devspace-xdg-portal-input.py"), helperPath);
+
   const upstreamModules = repairUpstreamMcpRuntime(rootDir);
-  return { patched: [...sessionFiles, ...upstreamModules], toolModule: toolPath };
+  return { patched: [...sessionFiles, ...runtimePaths, daemonPath, inputPath, helperPath, ...upstreamModules], toolModule: toolPath };
+}
+
+function patchPhysicalControlTool(source, filePath) {
+  const schemaPattern = /^(\s*)(allowHostFallback: z(\d*)\.boolean\(\)\.optional\(\)\.describe\([^\n]*\),)$/m;
+  if (!source.includes("allowHostControl: z")) {
+    if (!schemaPattern.test(source)) throw new Error(`Could not locate physical-control tool schema in ${filePath}.`);
+    source = source.replace(schemaPattern, `$1$2\n$1/* ${PHYSICAL_CONTROL_MARKER} */\n$1allowHostControl: z$3.boolean().optional().describe("Enable physical KDE mouse and keyboard input through the XDG Desktop Portal. Requires allowHostFallback: true. KDE may show a permission dialog; no input is sent unless approved."),`);
+  }
+  const callPattern = /(allowHostFallback: input\.allowHostFallback \?\? false,\n)(\s*)(indicator: input\.indicator,)/;
+  if (!source.includes("allowHostControl: input.allowHostControl === true") && !callPattern.test(source)) {
+    throw new Error(`Could not locate computer_use_start arguments in ${filePath}.`);
+  }
+  if (!source.includes("allowHostControl: input.allowHostControl === true")) {
+    source = source.replace(callPattern, "$1$2allowHostControl: input.allowHostControl === true,\n$2$3");
+  }
+  source = source.replaceAll('title: "Start Isolated Computer Use"', 'title: "Select Desktop Interaction Mode"');
+  source = source.replaceAll(
+    'description: "Start a nested KDE/Wayland desktop dedicated to DevSpace Computer Use. Apps, screenshots, accessibility, clipboard, mouse, and keyboard operations then target that isolated desktop so the user can keep using their normal desktop. Windowed sessions can start visible or minimized in the background and can be shown/hidden later without stopping the work. True headless mode has no attachable viewer. If isolation cannot start, host fallback is allowed only when requested.",',
+    'description: "Start a nested isolated KDE/Wayland desktop, or select the physical KDE desktop for observation. Set allowHostFallback true for physical observation; set allowHostControl true as well to enable mouse and keyboard through KDE XDG Desktop Portal consent. Input defaults to the isolated desktop.",',
+  );
+  return source;
+}
+
+function patchPhysicalInputRouting(source, filePath) {
+  if (source.includes(PHYSICAL_CONTROL_MARKER)) {
+    const methodStart = source.indexOf("async agentInput");
+    const markerPos = source.indexOf(PHYSICAL_CONTROL_MARKER);
+    if (methodStart >= 0 && markerPos > methodStart && markerPos < source.indexOf("takeUserControl(", methodStart)) {
+      return source.replace(/(this\.hostControlEnabled = options\.allowHostControl === true;)([ \t]*\n[ \t]*)(?:this\.hostControlEnabled = options\.allowHostControl === true;[ \t]*\n[ \t]*)+/g, "$1$2");
+    }
+    source = source.replace(new RegExp(`\\s*/\\* ${PHYSICAL_CONTROL_MARKER} \\*/[\\s\\S]*?await this\\.ensureIsolatedForInteraction\\(\\);\\n`), "\n");
+    source = source.replace(/await this\.ensureIsolatedForInteraction\(\);\n\s*await this\.ensureIsolatedForInteraction\(\);/, "await this.ensureIsolatedForInteraction();");
+  }
+  const before = "    async agentInput(request) {\n        await this.ensureIsolatedForInteraction();";
+  const bundleBefore = "  async agentInput(request2) {\n    await this.ensureIsolatedForInteraction();";
+  const hostBlock = `/* ${PHYSICAL_CONTROL_MARKER} */\n        const status = await this.refresh();\n        if (status.state === "ready" && status.mode === "host-fallback") {\n            if (!this.hostControlEnabled) throw new Error("Physical desktop input is disabled. Start with allowHostFallback and allowHostControl explicitly enabled.");\n            if (this.owner !== "agent") throw new ComputerUseUserControlError();\n            this.writeIndicator("controlling");\n            try { return await this.hostClient.input(request); }\n            finally { this.writeIndicator("active"); }\n        }\n        await this.ensureIsolatedForInteraction();`;
+  const needle = source.includes(before) ? before : bundleBefore;
+  if (!source.includes(needle)) throw new Error(`Could not locate computer-use input routing in ${filePath}.`);
+  const indent = source.includes(before) ? "        " : "    ";
+  const parameter = source.includes(before) ? "request" : "request2";
+  const indentedBlock = hostBlock
+    .replaceAll("request", parameter)
+    .split("\n")
+    .map((line, index) => index === 0 ? line : `${indent}${line.trimStart()}`)
+    .join("\n");
+  const oldCall = `${indent}await this.ensureIsolatedForInteraction();`;
+  const replacement = `${indent}${indentedBlock}\n${oldCall}`;
+  const methodStart = source.indexOf("async agentInput");
+  const methodEnd = source.indexOf("takeUserControl(", methodStart);
+  if (methodStart < 0 || methodEnd < 0) throw new Error(`Could not isolate computer-use input method in ${filePath}.`);
+  const method = source.slice(methodStart, methodEnd);
+  if (!method.includes(oldCall)) throw new Error(`Could not locate isolated input route in ${filePath}.`);
+  source = source.slice(0, methodStart) + method.replace(oldCall, replacement) + source.slice(methodEnd);
+  const select = "if (options.allowHostFallback === true) {";
+  const startIndex = source.indexOf("async start(options");
+  const index = source.indexOf(select, startIndex);
+  if (index < 0) throw new Error(`Could not locate physical desktop selection in ${filePath}.`);
+  const assignment = "this.hostControlEnabled = options.allowHostControl === true;";
+  if (!source.slice(index, index + 300).includes(assignment)) {
+    source = source.slice(0, index) + source.slice(index).replace(select, `${select}\n            ${assignment}`);
+  }
+  const duplicateAssignment = /(this\.hostControlEnabled = options\.allowHostControl === true;)([ \t]*\n[ \t]*)(?:this\.hostControlEnabled = options\.allowHostControl === true;[ \t]*\n[ \t]*)+/g;
+  return source.replace(duplicateAssignment, `${assignment}\n            `);
+}
+
+function patchPhysicalDaemonProvider(source, filePath) {
+  const before = "        this.inputProvider = options.input ?? createYdotoolInputProvider({ now: options.now });";
+  const after = `        /* ${PHYSICAL_CONTROL_MARKER} */\n        const physicalAgent = !this.paths.stateDir.includes("/computer-use/");\n        process.env.DEVSPACE_PHYSICAL_INPUT = physicalAgent ? "1" : "0";\n        this.inputProvider = options.input ?? createYdotoolInputProvider({\n            now: options.now,\n            timeoutMs: physicalAgent ? 150_000 : undefined,\n            ...(physicalAgent ? { runYdotool: async () => { throw new Error("Physical desktop input requires the approved KDE XDG RemoteDesktop portal; global input fallback is disabled."); } } : {}),\n        });`;
+  if (source.includes(PHYSICAL_CONTROL_MARKER)) {
+    const old = `        /* ${PHYSICAL_CONTROL_MARKER} */\n        const physicalAgent = !this.paths.stateDir.includes("/computer-use/");\n        process.env.DEVSPACE_PHYSICAL_INPUT = physicalAgent ? "1" : "0";\n        this.inputProvider = options.input ?? createYdotoolInputProvider({ now: options.now, timeoutMs: physicalAgent ? 150_000 : undefined });`;
+    return source.includes(old) ? source.replace(old, after) : source;
+  }
+  if (!source.includes(before)) throw new Error(`Could not locate desktop input provider setup in ${filePath}.`);
+  return source.replace(before, after);
+}
+
+function patchPhysicalHelperPath(source, filePath) {
+  if (source.includes(PHYSICAL_CONTROL_MARKER)) return source;
+  const before = 'export function defaultEisInputHelperPath() {\n    const built = fileURLToPath(new URL("./bin/devspace-eis-input-helper.py", import.meta.url));';
+  if (!source.includes(before)) throw new Error(`Could not locate default EIS helper path in ${filePath}.`);
+  return source.replace(before, `export function defaultEisInputHelperPath() {\n    /* ${PHYSICAL_CONTROL_MARKER} */\n    if (process.env.DEVSPACE_PHYSICAL_INPUT === "1") {\n        const portal = fileURLToPath(new URL("./bin/devspace-xdg-portal-input.py", import.meta.url));\n        return existsSync(portal) ? portal : undefined;\n    }\n    const built = fileURLToPath(new URL("./bin/devspace-eis-input-helper.py", import.meta.url));`);
 }
 
 function replaceOnceOrAlreadyPatched(source, options) {

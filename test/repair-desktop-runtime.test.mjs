@@ -18,6 +18,10 @@ test("desktop runtime repair is idempotent and leaves valid JavaScript", () => {
             return existing;
         }
     }
+    async agentInput(request) {
+        await this.ensureIsolatedForInteraction();
+    }
+    takeUserControl() {}
     launch(runtimeDir, outerWayland) {
         return {
             env: {
@@ -39,6 +43,10 @@ test("desktop runtime repair is idempotent and leaves valid JavaScript", () => {
       return existing;
     }
   }
+  async agentInput(request2) {
+    await this.ensureIsolatedForInteraction();
+  }
+  takeUserControl() {}
   launch(runtimeDir, outerWayland) {
     return {
       env: {
@@ -53,6 +61,16 @@ test("desktop runtime repair is idempotent and leaves valid JavaScript", () => {
   }
 }
 const description = "Allow the legacy live-desktop path if the isolated compositor cannot start. Defaults to false for safe concurrent use.";
+registerAppTool4(server, "computer_use_start", {
+  title: "Start Isolated Computer Use",
+  description: "Start a nested KDE/Wayland desktop dedicated to DevSpace Computer Use. Apps, screenshots, accessibility, clipboard, mouse, and keyboard operations then target that isolated desktop so the user can keep using their normal desktop. Windowed sessions can start visible or minimized in the background and can be shown/hidden later without stopping the work. True headless mode has no attachable viewer. If isolation cannot start, host fallback is allowed only when requested.",
+  inputSchema: {
+    allowHostFallback: z5.boolean().optional().describe("Select the physical KDE desktop for read-only observation. This selection persists until stopped or switched to isolated mode. Mouse and keyboard actions still use the isolated desktop."),
+  },
+}, async (input) => computerUse.start({
+  allowHostFallback: input.allowHostFallback ?? false,
+  indicator: input.indicator,
+}));
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 function configuredUpstreams(config) {
@@ -74,7 +92,19 @@ async function withClient(upstream, action, options = {}) {
 function errorResult(message) { return message; }
 `);
     writeFileSync(join(fixture, "dist/modules/desktop-agent.js"), `const description = "Allow the legacy live-desktop path if the isolated compositor cannot start. Defaults to false for safe concurrent use.";
+registerAppTool(server, "computer_use_start", {
+  inputSchema: {
+    allowHostFallback: z.boolean().optional().describe("Select the physical KDE desktop for read-only observation. This selection persists until stopped or switched to isolated mode. Mouse and keyboard actions still use the isolated desktop."),
+  },
+}, async (input) => {
+  const computer = await computerUse.start({
+    allowHostFallback: input.allowHostFallback ?? false,
+    indicator: input.indicator,
+  });
+});
 `);
+    writeFileSync(join(fixture, "dist/desktop-agent-daemon.js"), `        this.inputProvider = options.input ?? createYdotoolInputProvider({ now: options.now });\n`);
+    writeFileSync(join(fixture, "dist/desktop-input-eis.js"), `export function defaultEisInputHelperPath() {\n    const built = fileURLToPath(new URL("./bin/devspace-eis-input-helper.py", import.meta.url));\n}\n`);
 
     writeFileSync(join(fixture, "dist/upstream-mcp.js"), [
       'import { Client } from "@modelcontextprotocol/sdk/client/index.js";',
@@ -118,6 +148,15 @@ function errorResult(message) { return message; }
     assert.match(once[0], /this\.active \|\| this\.readSessionMetadata\(\)/);
     assert.match(once[0], /parsed\.sessionState === "ready" && parsed\.mode === "host-fallback"/);
     assert.match(once[2], /selection persists until stopped or switched to isolated mode/i);
+    assert.match(once[2], /allowHostControl/);
+    assert.match(once[1], /allowHostControl: z5\.boolean\(\)/);
+    assert.match(once[1], /allowHostControl: input\.allowHostControl === true/);
+    assert.match(once[1], /Select Desktop Interaction Mode/);
+    assert.match(readFileSync(join(fixture, "dist/computer-use-session.js"), "utf8"), /hostClient\.input\(request\)/);
+    assert.match(readFileSync(join(fixture, "dist/hot-modules.mjs"), "utf8"), /hostClient\.input\(request2\)/);
+    assert.match(readFileSync(join(fixture, "dist/desktop-agent-daemon.js"), "utf8"), /DEVSPACE_PHYSICAL_INPUT/);
+    assert.match(readFileSync(join(fixture, "dist/desktop-input-eis.js"), "utf8"), /devspace-xdg-portal-input\.py/);
+    assert.ok(readFileSync(join(fixture, "dist/bin/devspace-xdg-portal-input.py"), "utf8").includes("XDG RemoteDesktop"));
 
     for (const path of [
       join(fixture, "dist/computer-use-session.js"),
