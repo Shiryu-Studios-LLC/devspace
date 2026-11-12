@@ -22,6 +22,7 @@ import express from "express";
 import type { Request, Response } from "express";
 import * as z from "zod/v4";
 import { CodeModeRegistry } from "./code-mode-registry.js";
+import { registerDevspaceAdminTools } from "./devspace-admin.js";
 import { CodeModeExecutions, MAX_CODE_MODE_YIELD_MS, type ExecutionSnapshot } from "./code-mode-executions.js";
 import {
   isArtifactDownloadSupportedPlatform,
@@ -854,6 +855,10 @@ function registerMcpSurface(
     workspaces,
     processSessions,
   });
+
+  // Preserve the existing Admin tools on both host-specific MCP surfaces.
+  // All calls still pass through the same authenticated /mcp endpoint.
+  registerDevspaceAdminTools(registrationTarget);
 
   if (codeModeExecutions) {
     registerCodeModeTools(registrationTarget, workspaces, codeModeExecutions);

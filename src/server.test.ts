@@ -47,11 +47,17 @@ test("tool surfaces expose the expected host-facing tools", async (t) => {
   }> = [
     {
       surface: "claude",
-      expected: ["open_workspace", "read", "write", "edit", "bash", "show_changes"],
+      expected: [
+        "open_workspace", "read", "write", "edit", "bash", "show_changes",
+        "devspace_admin_status", "devspace_admin_call",
+      ],
     },
     {
       surface: "codex",
-      expected: ["open_workspace", "read", "apply_patch", "exec_command", "write_stdin", "show_changes"],
+      expected: [
+        "open_workspace", "read", "apply_patch", "exec_command", "write_stdin", "show_changes",
+        "devspace_admin_status", "devspace_admin_call",
+      ],
     },
   ];
 
@@ -72,7 +78,8 @@ test("experimental Code Mode bootstraps real tools and executes through MCP", as
   const context = await fixture(t, { experimentalCodeMode: true, uiEnabled: false, git: true });
   const listed = await context.client.listTools();
   assert.deepEqual(listed.tools.map((tool) => tool.name).sort(), [
-    "cancel_execution", "execute", "open_workspace", "poll_execution", "show_changes",
+    "cancel_execution", "devspace_admin_call", "devspace_admin_status",
+    "execute", "open_workspace", "poll_execution", "show_changes",
   ]);
 
   const opened = await callOpen(context.client, context.project);
@@ -1179,7 +1186,8 @@ test("experimental Code Mode executes over stateless HTTP MCP requests", async (
   // SAFETY: The surrounding checks or construction already match this type.
   const inventory = await listed.json() as { result?: { tools?: Array<{ name: string }> } };
   assert.deepEqual(inventory.result?.tools?.map((tool) => tool.name).sort(), [
-    "cancel_execution", "execute", "open_workspace", "poll_execution", "show_changes",
+    "cancel_execution", "devspace_admin_call", "devspace_admin_status",
+    "execute", "open_workspace", "poll_execution", "show_changes",
   ]);
 
   const opened = await postModernMcp(localBaseUrl, accessToken, "tools/call", {
